@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MyIB</title>
+<meta name="description" content="Your IB timetable, deadlines, exams and study time, 2026–27.">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#EDF0F6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#040507" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="MyIB">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="mode-boot">
+<a class="skip" href="#view">Skip to content</a>
+
+<header class="app-header">
+  <div class="wrap head-bar">
+    <button type="button" class="brand" data-act="tab" data-tab="today" aria-label="MyIB, go to Today">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-name">MyIB</span>
+      <span class="brand-sub">2º BI · 2026–27</span>
+    </button>
+    <nav class="top-nav" id="top-nav" aria-label="Sections"></nav>
+    <div class="head-actions">
+      <button type="button" class="icon-btn" id="theme-btn" data-act="theme-toggle" aria-label="Switch to dark theme"></button>
+      <button type="button" class="icon-btn" id="settings-btn" data-act="settings" aria-label="Settings and account"></button>
+    </div>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+<main id="view" class="wrap view" tabindex="-1"></main>
+
+<nav class="tabbar" id="tabbar" aria-label="Sections"></nav>
+
+<div id="auth" class="auth">
+  <div class="auth-card splash" role="status">
+    <div class="auth-brand"><img class="auth-logo" src="icons/icon-192.png" alt="" width="64" height="64"><p class="auth-name">MyIB</p><p class="auth-tag">IB planner · 2026–27</p></div>
+    <span class="spinner" aria-hidden="true"></span><span class="sr">Loading</span>
+  </div>
+</div>
+
+<dialog id="dlg" aria-labelledby="dlg-title"></dialog>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<noscript><p class="wrap">MyIB needs JavaScript turned on.</p></noscript>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

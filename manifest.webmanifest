@@ -1,0 +1,16 @@
+{
+  "name": "MyIB",
+  "short_name": "MyIB",
+  "description": "Your IB timetable, deadlines, exams and study time, 2026–27.",
+  "lang": "en",
+  "start_url": "./#today",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F2F2F7",
+  "theme_color": "#F2F2F7",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
