@@ -13,7 +13,7 @@ Built for Sociales 2 IB (2º BI B) and open to every IB student.
 ![Vanilla JS](https://img.shields.io/badge/vanilla-JS-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
 ![473 checks passing](https://img.shields.io/badge/checks-473%20passing-34C759?style=for-the-badge)
 
-<img src="myib-story_1.png" alt="MyIB on a phone: login, sign-up, welcome, setup guide, Past Papers editor" width="100%">
+<img src="myib-story.png" alt="MyIB on a phone: login, sign-up, welcome, setup guide, Past Papers editor" width="100%">
 
 </div>
 
