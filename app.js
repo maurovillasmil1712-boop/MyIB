@@ -238,6 +238,7 @@
     out.sessions = uniq((Array.isArray(pick('sessions')) ? pick('sessions') : []).map(function (x) { return cleanSession(x, sid); })).slice(-4000);
     out.papers = uniq((Array.isArray(pick('papers')) ? pick('papers') : []).map(function (x) { return cleanPaper(x, sid); })).slice(-1000);
     out.timer = cleanTimer(pick('timer'), sid);
+    out.pet = cleanPet(pick('pet'));
     return out;
   }
 
@@ -364,6 +365,7 @@
     ['subjects', 'periods', 'events', 'tasks', 'sessions', 'papers'].forEach(function (k) { out[k] = mergeList(base[k], mine[k], theirs[k]); });
     ['slots', 'settings', 'profile'].forEach(function (k) { out[k] = mergeMap(base[k], mine[k], theirs[k]); });
     out.timer = pick3(base.timer, mine.timer, theirs.timer) || null;
+    out.pet = mergePet(base.pet || null, mine.pet || null, theirs.pet || null);
     return sanitize(out);
   }
   function parseBase() { try { return SYNC.base ? JSON.parse(SYNC.base) : null; } catch (e) { return null; } }
@@ -390,6 +392,7 @@
     SYNC.pending = true; SYNC.gen++; SYNC.savedAt = Date.now(); SYNC.tooBig = false;
     writeCache();
     schedulePush(1200);
+    nativeSoon();
     if (!persistAsked) {
       persistAsked = true;
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {}); } catch (e) { /* ignore */ }
@@ -688,6 +691,7 @@
     if (S.sessions.some(function (x) { return x.id === id; })) return;
     S.sessions.push({ id: id, subject: subj(sid) ? sid : null, date: DATE.test(date) ? date : today(), minutes: Math.max(1, Math.min(720, Math.round(minutes))) });
     if (S.sessions.length > 4000) S.sessions = S.sessions.slice(-4000);
+    petOnSession(id);
   }
 
   /* =========================================================
@@ -713,6 +717,7 @@
     upload: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5V4.5M7.5 9L12 4.5 16.5 9M5 19.5h14"/></svg>',
     updown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 9.5l4-4 4 4M8 14.5l4 4 4-4"/></svg>',
     up: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5.5M6.5 11L12 5.5 17.5 11"/></svg>',
+    camera: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.6A1.6 1.6 0 0 1 5.6 7h2.2l1.5-2.2h5.4L16.2 7h2.2A1.6 1.6 0 0 1 20 8.6v8.8a1.6 1.6 0 0 1-1.6 1.6H5.6A1.6 1.6 0 0 1 4 17.4z"/><circle cx="12" cy="12.8" r="3.5"/></svg>',
     down: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v13.5M6.5 13l5.5 5.5 5.5-5.5"/></svg>',
     tick: '<svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     keyboard: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h1M9.5 10h1M13 10h1M16.5 10h1M7 14h10"/></svg>',
@@ -729,14 +734,30 @@
     palette: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.7 1.8-1.6 0-1.2-1-1.5-1-2.6 0-1 .8-1.6 1.8-1.6h2.2a3.7 3.7 0 0 0 3.7-3.7c0-4.3-3.8-7.5-8.5-7.5z"/><circle cx="7.8" cy="11.2" r="1"/><circle cx="10.6" cy="7.6" r="1"/><circle cx="15" cy="8.2" r="1"/></svg>',
     timer: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13.5" r="7"/><path d="M12 13.5V9.5M9.5 3h5M18.3 6.7l1.3-1.3"/></svg>',
     quiet: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 16.5V11a5.8 5.8 0 0 1 9.4-4.5M17.8 10.5v6l1.5 1.5H8M10 20.5a2.2 2.2 0 0 0 4 0M4 4l16 16"/></svg>',
-    refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/></svg>'
+    refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/></svg>',
+    chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5c4.7 0 8.5 3.1 8.5 7s-3.8 7-8.5 7c-1 0-2-.1-2.9-.4L5 19.5l1.2-3.5c-1.7-1.2-2.7-2.8-2.7-4.5 0-3.9 3.8-7 8.5-7z"/></svg>',
+    compose: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4.5H6.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V13"/><path d="M17.6 3.9a2 2 0 0 1 2.8 2.8l-7.9 7.9-3.6.8.8-3.6z"/></svg>',
+    info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.6v.2"/></svg>',
+    bulb: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.3 17.6h5.4M10.2 20.5h3.6"/><path d="M12 3.5a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2v1.3h5.2v-1.3c0-.8.4-1.5 1-2A6 6 0 0 0 12 3.5z"/></svg>',
+    flag: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 20.5V4.5M5.5 5h11.5l-2.4 4 2.4 4H5.5"/></svg>',
+    block: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M6 6l12 12"/></svg>',
+    bell: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 16.5V11a5.8 5.8 0 0 1 11.6 0v5.5l1.5 1.5H4.7zM10 20.5a2.2 2.2 0 0 0 4 0"/></svg>',
+    shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l7 2.8v5.2c0 4.4-3 7.8-7 9-4-1.2-7-4.6-7-9V6.3z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>',
+    pet: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12.2c2.9 0 5.2 2.5 5.2 4.6 0 1.6-1.3 2.6-2.8 2.6-1 0-1.5-.5-2.4-.5s-1.4.5-2.4.5c-1.5 0-2.8-1-2.8-2.6 0-2.1 2.3-4.6 5.2-4.6z"/><ellipse cx="5.6" cy="10.2" rx="1.8" ry="2.2"/><ellipse cx="9.3" cy="6.4" rx="1.8" ry="2.3"/><ellipse cx="14.7" cy="6.4" rx="1.8" ry="2.3"/><ellipse cx="18.4" cy="10.2" rx="1.8" ry="2.2"/></svg>',
+    'n-food': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12.2h17c0 4.2-3.8 7.3-8.5 7.3s-8.5-3.1-8.5-7.3z"/><circle cx="8.8" cy="9.2" r="1.6"/><circle cx="12.3" cy="7.8" r="1.6"/><circle cx="15.6" cy="9.4" r="1.6"/></svg>',
+    'n-water': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.8c3.2 4 5.6 7.1 5.6 10.1a5.6 5.6 0 0 1-11.2 0c0-3 2.4-6.1 5.6-10.1z"/><path d="M9.4 14.6a2.7 2.7 0 0 0 2.2 2.4"/></svg>',
+    'n-ball': '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M5.3 8.3c3.5 1 5.8 4.4 5.4 11.5M18.7 15.7c-3.5-1-5.8-4.4-5.4-11.5"/></svg>',
+    'n-fun': '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M5.3 8.3c3.5 1 5.8 4.4 5.4 11.5M18.7 15.7c-3.5-1-5.8-4.4-5.4-11.5"/></svg>',
+    'n-bone': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.2 14.8l5.6-5.6"/><circle cx="6.9" cy="14.9" r="2.1"/><circle cx="9.1" cy="17.1" r="2.1"/><circle cx="14.9" cy="6.9" r="2.1"/><circle cx="17.1" cy="9.1" r="2.1"/></svg>',
+    bow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.2 12L4 8v8zM13.8 12L20 8v8z"/><rect x="10.2" y="10" width="3.6" height="4" rx="1.2"/></svg>',
+    more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="17.5" cy="12" r="1.4" fill="currentColor"/></svg>'
   };
   function icon(n) { return IC[n] || ''; }
 
   /* =========================================================
      Shell: nav, theme, banner, toast, dialog
      ========================================================= */
-  var TABS = [['today', 'Today'], ['timetable', 'Timetable'], ['calendar', 'Calendar'], ['tasks', 'Tasks'], ['subjects', 'Subjects']];
+  var TABS = [['today', 'Today'], ['timetable', 'Timetable'], ['calendar', 'Calendar'], ['tasks', 'Tasks'], ['subjects', 'Subjects'], ['pet', 'Pet']];
   var mqDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   /* Before anyone logs in, use the look this device used last time. */
   function currentTheme() {
@@ -753,6 +774,8 @@
       var dark = t === 'auto' ? /dark/.test(m.getAttribute('media') || '') : t === 'dark';
       m.setAttribute('content', dark ? '#040507' : '#EDF0F6');
     });
+    /* auto: the app follows the phone, so the page's prefers-color-scheme keeps working */
+    toNative({ type: 'theme', mode: t, dark: effectiveDark() });
   }
   if (mqDark) {
     var onScheme = function () { if (MODE === 'app' && currentTheme() === 'auto') renderNav(); };
@@ -769,7 +792,18 @@
       var sb = $('#settings-btn');
       sb.innerHTML = icon('settings');
       sb.title = 'Settings and backup';
+      var cb = $('#chat-btn');
+      if (cb) { cb.innerHTML = icon('chat'); cb.title = 'Chats'; }
       navBuilt = true;
+    }
+    var chb = $('#chat-btn');
+    if (chb) { if (UI.tab === 'chat') chb.setAttribute('aria-current', 'page'); else chb.removeAttribute('aria-current'); }
+    paintBadge();
+    var hb = $('#settings-btn'), pfp = ME && ME.avatar ? ME.id + ':' + ME.avatar : '';
+    if ((hb.dataset.pfp || '') !== pfp) {
+      hb.dataset.pfp = pfp;
+      hb.classList.toggle('has-pfp', !!pfp);
+      hb.innerHTML = pfp ? '<img class="head-pfp" src="' + esc(avatarSrc(ME.id, ME.avatar)) + '" alt="">' : icon('settings');
     }
     $$('#top-nav [data-tab], #tabbar [data-tab]').forEach(function (b) {
       if (b.dataset.tab === UI.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
@@ -881,6 +915,7 @@
   function closeDialog() { if (dlg.open) dlg.close(); }
   dlg.addEventListener('close', function () {
     dlgSubmit = null; dlgBack = null; curSheet = null; dlg.innerHTML = '';
+    if (PFP) { URL.revokeObjectURL(PFP.url); PFP = null; }
     if (settingsTouched) { settingsTouched = false; render(); }
     if (SYNC.wantPull) setTimeout(pull, 60);
   });
@@ -892,10 +927,20 @@
     if (i < 0) { i = 0; for (var k = 0; k < id.length; k++) i = (i * 31 + id.charCodeAt(k)) >>> 0; }
     return AVATAR[i % AVATAR.length];
   }
-  function avatar(id, name, size) {
-    var c = avatarColor(String(id));
-    return '<span class="avatar' + (size ? ' ' + size : '') + '" style="--c:' + c + ';color:' + iconInk(c) + '" aria-hidden="true">' + esc(Array.from(String(name || '?'))[0].toUpperCase()) + '</span>';
+  /* v = when the photo was uploaded; a new photo gets a new address, so browsers can keep the old one cached */
+  function avatarSrc(id, v) { return v ? '/api/avatar/' + encodeURIComponent(id) + '?v=' + encodeURIComponent(v) : ''; }
+  function avatar(id, name, size, v) {
+    var c = avatarColor(String(id)), src = avatarSrc(id, v);
+    return '<span class="avatar' + (size ? ' ' + size : '') + '" style="--c:' + c + ';color:' + iconInk(c) + '" aria-hidden="true">' + esc(Array.from(String(name || '?'))[0].toUpperCase()) +
+      (src ? '<img class="avatar-img" src="' + esc(src) + '" alt="" decoding="async">' : '') + '</span>';
   }
+  /* a photo that won't load (offline, or taken down) falls back to the letter */
+  document.addEventListener('error', function (e) {
+    var t = e.target;
+    if (!t || !t.classList) return;
+    if (t.classList.contains('head-pfp')) { var hb = t.parentNode; hb.dataset.pfp = ''; hb.classList.remove('has-pfp'); hb.innerHTML = icon('settings'); }
+    else if (t.classList.contains('avatar-img')) t.remove();
+  }, true);
   dlg.addEventListener('click', function (e) { if (e.target === dlg) closeDialog(); });
   dlg.addEventListener('submit', function (e) {
     e.preventDefault();
@@ -960,24 +1005,40 @@
     renderBanner();
     var v = $('#view');
     var fk = focusKey(document.activeElement);
+    if (v.getAttribute('data-view') === 'chat') chatKeep();
+    petKeep();
     v.innerHTML = (VIEWS[UI.tab] || VIEWS.today)();
     v.setAttribute('data-view', UI.tab);
+    document.body.classList.toggle('chat-conv', UI.tab === 'chat' && !!CHAT.open && chatAgreed());
     if (fk) { var back = $(fk, v); if (back) back.focus({ preventScroll: true }); }
+    if (UI.tab === 'chat' && chatAgreed()) chatMounted();
+    if (UI.tab === 'pet') petMounted();
     updateTimerUI();
+    nativeSoon();
   }
   function go(tab) {
-    if (!TABS.some(function (t) { return t[0] === tab; })) tab = 'today';
+    if (!isView(tab)) tab = 'today';
     var changed = UI.tab !== tab;
+    /* phones open Chats on the list; big screens keep the chat you had open */
+    if (tab === 'chat' && changed && !wideChat()) { CHAT.open = null; CHAT.pushed = false; }
     UI.tab = tab;
-    if (location.hash.slice(1) !== tab) { try { history.pushState(null, '', '#' + tab); } catch (e) { location.hash = tab; } }
+    var h = tab === 'chat' ? chatHash() : tab;
+    if (location.hash.slice(1) !== h) { try { history.pushState(null, '', '#' + h); } catch (e) { location.hash = h; } }
     render();
-    if (changed) { window.scrollTo(0, 0); $('#view').focus({ preventScroll: true }); }
+    if (changed) {
+      window.scrollTo(0, 0);
+      $('#view').focus({ preventScroll: true });
+      if (tab === 'chat') sizeChat();
+      chatWake(tab === 'chat' ? 60 : null);
+    }
   }
   window.addEventListener('popstate', function () {
-    var h = location.hash.slice(1);
-    UI.tab = TABS.some(function (t) { return t[0] === h; }) ? h : 'today';
+    var v = parseHash(location.hash.slice(1));
+    UI.tab = v.tab;
+    if (v.tab === 'chat') { CHAT.open = v.conv; CHAT.pushed = false; }
     closeDialog();
     render();
+    if (MODE === 'app' && ME) chatWake(v.tab === 'chat' ? 60 : null);
   });
 
   /* ---------- shared bits ---------- */
@@ -1051,7 +1112,7 @@
           '<p class="hero-day">' + DAYS_LONG[dow(t)] + '</p>' +
           '<h1 class="display">' + td.getDate() + ' ' + MONTH_LONG[td.getMonth()] + '</h1>' +
           '<p class="sub">' + esc(greet) + (name ? ', ' + esc(name) : '') + '</p>' +
-          headsUp(t) +
+          headsUp(t) + petNudge() +
         '</div>' +
         countdown(t) +
         guideCard() +
@@ -1089,7 +1150,7 @@
           '<button type="button" class="link" data-act="guide-hide">' + (all ? 'Close' : 'Hide') + '</button></header>' +
         '<div class="guide-progress"><div class="guide-bar" aria-hidden="true"><i style="width:' + Math.round(n / steps.length * 100) + '%"></i></div>' +
           '<span class="guide-count">' + n + ' of ' + steps.length + ' done</span></div>' +
-        (all ? '<p class="empty">Your planner is ready. Settings has more: a backup, calendar export and MyIB Plus.</p>' : '<ol class="guide-steps">' + list + '</ol>') +
+        (all ? '<p class="empty">Your planner is ready. Settings has more: ' + (sellHere() || plusOn() ? 'a backup, calendar export and MyIB Plus.' : 'a backup and calendar export.') + '</p>' : '<ol class="guide-steps">' + list + '</ol>') +
       '</section>';
   }
 
@@ -1197,28 +1258,45 @@
       if (it.kind === 'br') {
         html += '<li class="dl-row brk"><span class="dl-time">' + it.p.start + '</span><div class="dl-band">' + esc(it.p.label || 'Break') + ' · ' + esc(dur(it.en - it.st)) + '</div></li>';
       } else {
-        var b = it.b, cls = '', tag = '', prog = '';
+        var b = it.b, cls = '', tag = '', fill = false;
         if (live) {
-          if (nm >= it.en) cls = 'past';
+          if (nm >= it.en) { cls = 'past'; fill = true; }
           else if (nm >= it.st) {
-            cls = 'now';
+            cls = 'now'; fill = true;
             tag = '<span class="now-tag">Now · ' + esc(dur(Math.max(1, Math.ceil(it.en - nm)))) + ' left</span>';
-            prog = '<span class="prog" style="width:' + ((nm - it.st) / (it.en - it.st) * 100).toFixed(1) + '%"></span>';
           } else if (!nextMarked) {
             nextMarked = true;
             tag = '<span class="next-tag">Next' + (it.st - nm <= 120 ? ' · in ' + esc(dur(Math.max(1, Math.ceil(it.st - nm)))) : '') + '</span>';
           }
         }
         var meta = [b.sl.teacher || b.s.teacher, b.sl.room, b.sl.note].filter(Boolean).join(' · ');
+        var inner = '<span class="dl-top"><span class="dl-name">' + esc(b.s.name) + '</span>' + tag + '</span>' +
+          (meta ? '<span class="dl-meta">' + esc(meta) + '</span>' : '');
         html += '<li class="dl-row ' + cls + '"><span class="dl-time">' + b.start + '<small>' + b.end + '</small></span>' +
           '<button type="button" class="dl-block" style="' + cvar(b.s) + '" data-act="tt-cell" data-p="' + b.p.id + '" data-d="' + dow(d) + '">' +
-            '<span class="dl-top"><span class="dl-name">' + esc(b.s.name) + '</span>' + tag + '</span>' +
-            (meta ? '<span class="dl-meta">' + esc(meta) + '</span>' : '') + prog +
+            inner + (fill ? fillBar(it.st, it.en, nm, inner) : '') +
           '</button></li>';
       }
       prevEnd = Math.max(prevEnd == null ? 0 : prevEnd, it.en);
     });
     return html;
+  }
+
+  /* The subject's colour bar grows to the right while the class goes on and fills the block once it's over.
+     It carries a copy of the block's text in dark ink (light on the darkest colours), clipped to the bar,
+     so every letter the bar passes stays readable. tick() moves it every second. */
+  function fillBar(st, en, nm, inner) {
+    var p = Math.max(0, Math.min(1, (nm - st) / (en - st)));
+    return '<span class="fill-bar" data-st="' + st + '" data-en="' + en + '" style="--p:' + p.toFixed(4) + '" aria-hidden="true">' + (inner || '') + '</span>';
+  }
+  function moveFillBars() {
+    var bars = $$('#view .fill-bar[data-st]');
+    if (!bars.length) return;
+    var nm = nowMin();
+    bars.forEach(function (f) {
+      var st = Number(f.dataset.st), en = Number(f.dataset.en);
+      f.style.setProperty('--p', Math.max(0, Math.min(1, (nm - st) / (en - st))).toFixed(4));
+    });
   }
 
   function cardComing(t) {
@@ -1267,7 +1345,7 @@
             '<div class="seg" role="group" aria-label="Session length">' + [25, 45, 60].map(function (m) {
               return '<button type="button" data-act="focus-len" data-len="' + m + '" aria-pressed="' + (len === m) + '"' + (st ? ' disabled' : '') + '>' + m + ' min</button>';
             }).join('') +
-              '<button type="button" data-act="focus-custom" aria-pressed="' + ([25, 45, 60].indexOf(len) < 0) + '"' + (st ? ' disabled' : '') + '>' + ([25, 45, 60].indexOf(len) < 0 ? len + ' min' : 'Other') + '</button>' +
+              (plusOn() || sellHere() ? '<button type="button" data-act="focus-custom" aria-pressed="' + ([25, 45, 60].indexOf(len) < 0) + '"' + (st ? ' disabled' : '') + '>' + ([25, 45, 60].indexOf(len) < 0 ? len + ' min' : 'Other') + '</button>' : '') +
             '</div>' +
             '<div class="btns">' +
               '<button type="button" class="round-btn stop" data-act="focus-cancel"' + (st ? '' : ' disabled') + '>Cancel</button>' + go +
@@ -1316,6 +1394,7 @@
       var secs = Math.ceil(st.remaining / 1000);
       if (tEl) tEl.textContent = fmtClock(secs);
       if (arc) arc.setAttribute('stroke-dashoffset', (RING_C * (1 - st.remaining / st.total)).toFixed(2));
+      var pt = $('#pet-timer'); if (pt) pt.textContent = fmtClock(secs);
       document.title = fmtClock(secs) + ' · ' + (subj(st.subject) ? subj(st.subject).short : 'Focus') + ' · MyIB';
     } else {
       if (arc) arc.setAttribute('stroke-dashoffset', '0');
@@ -1400,11 +1479,12 @@
     var tm = slotTimes(p, sl);
     var live = !hol && d === td && nm >= toMin(tm.start) && nm < toMin(tm.end);
     var meta = [sl.teacher || s.teacher, sl.room].filter(Boolean).join(' · ');
-    return '<button type="button" class="tt-cell' + (live ? ' now' : '') + '" style="' + cvar(s) + '" data-act="tt-cell" data-p="' + p.id + '" data-d="' + d + '" aria-label="' + esc(DAYS_LONG[d] + ' ' + tm.start + ', ' + s.name + (meta ? ', ' + meta : '')) + '">' +
-      '<span class="n">' + esc(s.short) + '</span>' +
+    var inner = '<span class="n">' + esc(s.short) + '</span>' +
       (meta ? '<span class="m">' + esc(meta) + '</span>' : '') +
       (sl.start ? '<span class="x">' + sl.start + '–' + sl.end + '</span>' : '') +
-      (sl.note ? '<span class="m">' + esc(sl.note) + '</span>' : '') +
+      (sl.note ? '<span class="m">' + esc(sl.note) + '</span>' : '');
+    return '<button type="button" class="tt-cell' + (live ? ' now' : '') + '" style="' + cvar(s) + '" data-act="tt-cell" data-p="' + p.id + '" data-d="' + d + '" aria-label="' + esc(DAYS_LONG[d] + ' ' + tm.start + ', ' + s.name + (meta ? ', ' + meta : '')) + '">' +
+      inner + (live ? fillBar(toMin(tm.start), toMin(tm.end), nm, inner) : '') +
     '</button>';
   }
   function ttMobile(days, td, nm, hol) {
@@ -1903,12 +1983,13 @@
     var lb = S.settings.lastBackup, p = plusOn(), free = isFree();
     var who = (p ? plusLabel() : free ? 'Free account' : 'MyIB account') + (free ? ' · @' + ME.id : '');
     var body =
-      grp('<div class="row acct">' + avatar(ME.id, ME.name) + '<span class="two-line"><b>' + esc(ME.name) + '</b><span>' + esc(who) + '</span></span></div>' +
+      grp('<button type="button" class="row row-btn acct" data-act="pfp-open" aria-label="Profile picture">' + avatar(ME.id, ME.name, '', ME.avatar) +
+            '<span class="two-line"><b>' + esc(ME.name) + '</b><span>' + esc(who) + '</span></span><span class="acct-edit">' + (ME.avatar ? 'Edit' : 'Add photo') + '</span>' + icon('chev') + '</button>' +
           rNav('key', 'Change Password', 'pw-open') +
           '<button type="button" class="row row-btn danger-text" data-act="logout">' + icon('logout') + '<span class="row-label">Log Out</span></button>',
           'Account', syncText()) +
-      grp(rNav('star', p ? 'MyIB Plus' : 'Get MyIB Plus', 'plus-open', p ? 'On' : '') +
-          rNav('heart', 'Support the Dev', 'support-open')) +
+      shopGroup(p) +
+      remindGroup() +
       grp('<div class="row wrap"><span class="row-label">Appearance</span><span class="row-value"><span class="seg" role="group" aria-label="Appearance">' +
         [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(function (o) {
           return '<button type="button" data-act="set-theme" data-theme="' + o[0] + '" aria-pressed="' + (S.settings.theme === o[0]) + '">' + o[1] + '</button>';
@@ -1922,16 +2003,19 @@
           'Your planner already saves to your account. A backup is an extra copy you keep as a file. ' + (lb ? 'Last backup: ' + esc(fDay(lb)) + '.' : 'No backup yet.')) +
       legacyGroup() +
       (ME.admin ? grp(rNav('users', 'Manage Accounts', 'admin-open') +
+          rNav('flag', 'Chat Reports', 'admin-reports', CHAT.reports ? CHAT.reports + ' open' : 'None') +
           rNav('paper', 'Past Papers Section', 'admin-papers', CONF.papers ? 'Edited' : 'Default') +
           rNav('star', 'Plus Price', 'admin-price', euro((CONF.price || PRICE_DEFAULT).month) + ' a month') +
           rNav('heart', 'Bizum Number', 'admin-bizum', CONF.bizum || 'Not set'), 'Admin',
-          'Only you see this. Manage accounts, change the Past Papers links and text, set the Plus price and your Bizum number.') : '') +
+          'Only you see this. Manage accounts, check reported chat messages, change the Past Papers links and text, set the Plus price and your Bizum number.') : '') +
       (free ? grp(rNav('check', guideOn() ? 'Setup Guide' : 'Show Setup Guide', 'guide-show', guideOn() ? 'On Today' : '')) : '') +
       grp('<div class="row"><span class="row-label">Keyboard</span><span class="row-value"><span class="kbd">1</span>–<span class="kbd">5</span>&nbsp;sections · <span class="kbd">N</span>&nbsp;task · <span class="kbd">E</span>&nbsp;event</span></div>') +
       grp(rButton(free ? 'Start Over' : 'Reset to Starting Data', 'reset-all', '', 'danger'), '', free
         ? 'Empties your timetable, dates and tasks and keeps only the IB core. Export a backup first if you want to keep your changes.'
         : 'Puts back the starting timetable, calendar and tasks. Export a backup first if you want to keep your changes.') +
-      (free ? grp(rButton('Delete Account', 'account-delete', '', 'danger'), '', 'Deletes your account and your planner from MyIB for good.') : '');
+      grp(legalLinks(), 'About') +
+      (ME.admin ? '' : grp(rButton('Delete Account', 'account-delete', '', 'danger'), '', free ? 'Deletes your account, planner, photo and chats from MyIB for good.'
+        : 'Deletes your planner, photo, chats and password from MyIB for good. Your name stays on the class list, locked until Mauro gives you a setup code.'));
     openDialog({ title: 'Settings', body: body });
   }
   function plusLabel() { return ME.plus === 'admin' ? 'MyIB Plus · owner' : ME.plus === 'class' ? 'MyIB Plus · class code' : 'MyIB Plus'; }
@@ -1941,6 +2025,7 @@
     return 'Your planner saves to your account and syncs to every device where you log in.';
   }
   function accentGroup() {
+    if (!plusOn() && !sellHere()) return '';
     var cur = plusOn() ? S.settings.accent || '' : '';
     return grp('<div class="swatches accents" role="group" aria-label="App colour">' + ACCENTS.map(function (a) {
         return '<button type="button" class="accent-sw" data-act="set-accent" data-accent="' + a[0] + '" style="--c:' + a[2] + '" aria-pressed="' + (cur === a[0]) + '" aria-label="' + a[1] + '" title="' + a[1] + '">' + icon('check') + '</button>';
@@ -1948,7 +2033,7 @@
   }
   function calUrl() { return CONF.cal && /^[A-Za-z0-9_-]{32}$/.test(CONF.cal) ? location.origin + '/api/cal/' + CONF.cal + '.ics' : ''; }
   function liveCalGroup() {
-    if (!plusOn()) return grp(rNav('star', 'Live Calendar with Plus', 'plus-open'), 'Live calendar', 'Plus puts your deadlines and exams in Apple or Google Calendar and keeps them up to date.');
+    if (!plusOn()) return sellHere() ? grp(rNav('star', 'Live Calendar with Plus', 'plus-open'), 'Live calendar', 'Plus puts your deadlines and exams in Apple or Google Calendar and keeps them up to date.') : '';
     var url = calUrl();
     if (!url) return grp(rButton(icon('calendar') + 'Turn On Live Calendar', 'cal-link'), 'Live calendar', 'Get a private link your calendar app checks every few hours, so new dates show up by themselves.');
     return grp('<a class="row row-btn" href="' + esc(url.replace(/^https?:/, 'webcal:')) + '">' + icon('calendar') + 'Subscribe in Calendar</a>' +
@@ -2018,7 +2103,8 @@
     curSheet = openDeleteAccount;
     var body =
       '<input class="sr" type="text" name="username" value="' + esc(ME.id) + '" autocomplete="username" tabindex="-1" aria-hidden="true">' +
-      '<div class="plus-hero"><h3>Delete @' + esc(ME.id) + '?</h3><p>Your account, your planner and your logins on every device go for good. Nobody can bring them back, not even Mauro.</p></div>' +
+      (isFree() ? '<div class="plus-hero"><h3>Delete @' + esc(ME.id) + '?</h3><p>Your account, your planner, your photo, your chats and your logins on every device go for good. Nobody can bring them back, not even Mauro.</p></div>'
+                : '<div class="plus-hero"><h3>Delete your account?</h3><p>Your planner, your photo, your chats, your password and your logins on every device go for good. Nobody can bring them back, not even Mauro. ' + esc(ME.name) + ' stays on the class list; to use it again, ask Mauro for a setup code.</p></div>') +
       grp(rButton(icon('download') + 'Export Backup First', 'backup-export')) +
       grp(rPw('Password', 'current', 'da-pw', 'current-password', false), 'Type your password to confirm');
     openDialog({
@@ -2039,8 +2125,10 @@
           return api('POST', '/api/account/delete', {});
         }).then(function (r) {
           if (r.status !== 200) throw { msg: 'Couldn’t delete it (error ' + r.status + '). Try again.' };
+          toNative({ type: 'logout' });
           stopApp();
-          sdel(cacheKey(id)); sdel('myib:last'); sdel('myib:ui:' + id); sdel('myib:nag:' + id); sdel('myib:papers:' + id);
+          ['myib:ui:', 'myib:nag:', 'myib:papers:', 'myib:remind:', 'myib:chatok:'].forEach(function (k) { sdel(k + id); });
+          sdel(cacheKey(id)); sdel('myib:last');
           showAuth({});
           toast('Your account is deleted');
         }).catch(function (e) {
@@ -2051,6 +2139,118 @@
         return false;
       }
     });
+  }
+
+  /* ---------- Profile picture ---------- */
+  var PFP = null;   /* the photo being cropped: { url, img, w, h, S, base, z, x, y } */
+  function openPfp() {
+    curSheet = openPfp;
+    var has = !!ME.avatar;
+    var body =
+      '<div class="pfp-hero">' + avatar(ME.id, ME.name, 'xxl', ME.avatar) + '<h3>' + esc(ME.name) + '</h3></div>' +
+      grp(rButton(icon('camera') + (has ? 'Choose a New Photo' : 'Choose a Photo'), 'pfp-pick') +
+          '<input type="file" id="pfp-file" accept="image/*" hidden>' +
+          (has ? rButton('Remove Photo', 'pfp-remove', '', 'danger') : ''), '',
+          'Anyone logged in to MyIB can see your photo. Mauro can take down photos.');
+    openDialog({ title: 'Profile Picture', body: body, back: openSettings, backLabel: 'Settings' });
+  }
+  function pfpFile(input) {
+    var file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    if (file.type && !/^image\//.test(file.type)) { toast('That file isn’t a picture'); return; }
+    if (file.size > 30e6) { toast('That picture is too big. Pick one under 30 MB.'); return; }
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      if (!img.naturalWidth || !img.naturalHeight) { URL.revokeObjectURL(url); toast('Couldn’t open that picture'); return; }
+      if (PFP) URL.revokeObjectURL(PFP.url);
+      PFP = { url: url, img: img, w: img.naturalWidth, h: img.naturalHeight, S: 0, base: 1, z: 1, x: 0, y: 0 };
+      openCrop();
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); toast('Couldn’t open that picture. Try a JPG or PNG.'); };
+    img.src = url;
+  }
+  function openCrop() {
+    if (!PFP) return;
+    curSheet = openCrop;
+    var body = '<div class="crop" id="crop"><img id="crop-img" src="' + esc(PFP.url) + '" alt="" draggable="false"><span class="crop-ring" aria-hidden="true"></span></div>' +
+      grp('<label class="row crop-zoom"><span class="sr">Zoom</span><span class="zoom-ic small" aria-hidden="true">' + icon('camera') + '</span>' +
+          '<input type="range" id="crop-zoom" min="1" max="4" step="0.01" value="1"><span class="zoom-ic" aria-hidden="true">' + icon('camera') + '</span></label>', '',
+          'Drag the photo to move it. Pinch or use the slider to zoom.');
+    openDialog({ title: 'Move and Scale', body: body, submitLabel: 'Save', back: openPfp, backLabel: 'Back', onSubmit: function (fd, form) { savePfp(form); return false; } });
+    cropSetup();
+  }
+  function cropSetup() {
+    var stage = $('#crop', dlg);
+    if (!stage || !PFP) return;
+    PFP.S = stage.clientWidth;
+    PFP.base = Math.max(PFP.S / PFP.w, PFP.S / PFP.h);
+    PFP.z = 1; PFP.x = (PFP.S - PFP.w * PFP.base) / 2; PFP.y = (PFP.S - PFP.h * PFP.base) / 2;
+    cropDraw();
+    var pts = new Map(), gap = 0;
+    stage.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      try { stage.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); gap = 0;
+    });
+    stage.addEventListener('pointermove', function (e) {
+      var prev = pts.get(e.pointerId);
+      if (!prev) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 1) { PFP.x += e.clientX - prev.x; PFP.y += e.clientY - prev.y; cropClamp(); cropDraw(); return; }
+      var a = Array.from(pts.values()), d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+      if (gap) cropZoomTo(PFP.z * d / gap);
+      gap = d;
+    });
+    function up(e) { pts.delete(e.pointerId); gap = 0; }
+    stage.addEventListener('pointerup', up);
+    stage.addEventListener('pointercancel', up);
+    stage.addEventListener('wheel', function (e) { e.preventDefault(); cropZoomTo(PFP.z * Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+  }
+  /* the photo always covers the whole square */
+  function cropClamp() {
+    var sc = PFP.base * PFP.z;
+    PFP.x = Math.min(0, Math.max(PFP.S - PFP.w * sc, PFP.x));
+    PFP.y = Math.min(0, Math.max(PFP.S - PFP.h * sc, PFP.y));
+  }
+  function cropDraw() {
+    var img = $('#crop-img', dlg), r = $('#crop-zoom', dlg);
+    if (!img || !PFP) return;
+    var sc = PFP.base * PFP.z;
+    img.style.width = (PFP.w * sc) + 'px'; img.style.height = (PFP.h * sc) + 'px';
+    img.style.transform = 'translate(' + PFP.x + 'px,' + PFP.y + 'px)';
+    if (r && document.activeElement !== r) r.value = String(PFP.z);
+  }
+  /* zoom around the middle of the square */
+  function cropZoomTo(z) {
+    if (!PFP) return;
+    z = Math.max(1, Math.min(4, z));
+    var sc0 = PFP.base * PFP.z, sc1 = PFP.base * z, c = PFP.S / 2;
+    var ix = (c - PFP.x) / sc0, iy = (c - PFP.y) / sc0;
+    PFP.z = z; PFP.x = c - ix * sc1; PFP.y = c - iy * sc1;
+    cropClamp(); cropDraw();
+  }
+  /* the app makes a 320×320 JPEG (about 30 KB) and sends only that */
+  function savePfp(form) {
+    if (!PFP || busyForm(form, true)) return;
+    var OUT = 320, sc = PFP.base * PFP.z, cv = document.createElement('canvas');
+    cv.width = OUT; cv.height = OUT;
+    var g = cv.getContext('2d');
+    g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, OUT, OUT);
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(PFP.img, -PFP.x / sc, -PFP.y / sc, PFP.S / sc, PFP.S / sc, 0, 0, OUT, OUT);
+    var data = cv.toDataURL('image/jpeg', 0.86);
+    api('PUT', '/api/avatar', { image: data }).then(function (r) {
+      busyForm(form, false);
+      if (r.status === 200 && r.data && r.data.avatar) {
+        ME.avatar = r.data.avatar; writeCache(); renderNav(); settingsTouched = true;
+        openPfp(); toast('Profile picture saved');
+        return;
+      }
+      if (r.status === 401) return sessionLost();
+      if (r.status === 429) return toast('Too many changes. Try again in a while.');
+      toast('Couldn’t save it (error ' + r.status + ')');
+    }, function () { busyForm(form, false); toast('Can’t reach MyIB. Check your connection.'); });
   }
 
   /* ---------- Welcome + subject picker (empty planners) ---------- */
@@ -2121,10 +2321,13 @@
     ['paper', '#007AFF', 'Past-paper tracker', 'Log every past paper you do and see your average per subject.'],
     ['palette', '#AF52DE', 'App colours', 'Pick the colour MyIB uses for buttons and highlights.'],
     ['timer', '#FF9500', 'Any timer length', 'Focus sessions from 5 to 180 minutes.'],
-    ['quiet', '#34C759', 'No more pop-ups', 'The support pop-up stops showing up.']
+    ['quiet', '#34C759', 'No more pop-ups', 'The support pop-up stops showing up.'],
+    ['pet', '#FF9500', 'More for your puppy', 'Dalmatian, Husky and Corgi, plus a scarf, sunglasses, headphones and a crown.']
   ];
   var eggTaps = [];
   function openPlus(back) {
+    /* the iPhone app sells nothing itself: it links to the website where Apple allows that */
+    if (NATIVE && !plusOn()) { if (sellHere()) openWeb('plus'); return; }
     curSheet = function () { openPlus(back); };
     eggTaps = [];
     var p = plusOn();
@@ -2141,11 +2344,12 @@
     var body =
       '<div class="plus-hero"><span class="plus-badge">' + icon('star') + '</span><h3>MyIB Plus</h3><p>' + (p ? 'Plus is on. Everything below is unlocked.' : 'More tools for the IB year.') + '</p></div>' +
       grp(perks) + buy +
+      (NATIVE ? '<p class="group-foot plus-fine">Questions about your subscription? Ask Mauro.</p>' :
       '<p class="group-foot plus-fine">Questions about your <span class="egg" data-act="egg">subscription</span>? Ask Mauro.</p>' +
       '<div class="egg-box" id="egg-box" hidden>' +
         grp('<label class="row"><span class="sr">Class code</span><input class="row-field egg-field" type="text" name="code" id="egg-code" maxlength="120" placeholder="UNLOCK EVERYTHING" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"></label>' +
             rButton('Unlock', 'egg-unlock', '', 'center strong')) +
-      '</div>';
+      '</div>');
     openDialog({ title: 'MyIB Plus', body: body, back: back || null });
   }
   /* Tap "subscription" five times and the class-code box shows up. */
@@ -2190,6 +2394,7 @@
   /* ---------- Support the dev (also the pop-up) ---------- */
   var NAG_HOURS = 3, nagTimer = null;
   function openSupport(back, auto) {
+    if (NATIVE) { if (sellHere()) openWeb('support'); return; }
     curSheet = function () { openSupport(back, auto); };
     var b = CONF.bizum;
     var body =
@@ -2205,7 +2410,7 @@
   /* The pop-up: 45 s after opening, then at most every NAG_HOURS per device. Plus turns it off. */
   function scheduleNag() {
     clearTimeout(nagTimer); nagTimer = null;
-    if (!ME || plusOn()) return;
+    if (!ME || plusOn() || NATIVE) return;
     var key = 'myib:nag:' + ME.id, last = Number(sget(key)) || 0;
     var wait = Math.max(45000, last + NAG_HOURS * 3600000 - Date.now());
     nagTimer = setTimeout(function tryNag() {
@@ -2274,7 +2479,7 @@
     }).join('');
     var body = (P.intro ? '<p class="papers-intro">' + lines(P.intro) + '</p>' : '') +
       (links ? grp(links, P.head ? esc(P.head) : '', P.foot ? lines(P.foot) : '') : P.foot ? '<p class="group-foot">' + lines(P.foot) + '</p>' : '') +
-      (plusOn() ? papersLog() : grp(rNav('star', 'Track Your Scores with Plus', 'plus-open'), 'Your papers', 'Log each past paper you do and see your average per subject.')) +
+      (plusOn() ? papersLog() : !sellHere() ? '' : grp(rNav('star', 'Track Your Scores with Plus', 'plus-open'), 'Your papers', 'Log each past paper you do and see your average per subject.')) +
       (ME.admin ? grp(rNav('paper', 'Edit This Section', 'admin-papers'), '', 'Only you see this button.') : '');
     openDialog({ title: P.title || 'Past Papers', body: body, wide: true });
   }
@@ -2481,7 +2686,7 @@
   function adminRow(u) {
     var st = u.admin ? 'You' : u.reset ? (u.last_login ? 'Waiting for reset code' : 'Waiting for setup code') : !u.claimed ? 'No password yet' : 'Last login ' + ago(u.last_login);
     var free = u.kind === 'free';
-    return '<button type="button" class="row row-btn acct-row" data-act="admin-user" data-id="' + esc(u.id) + '"' + (free ? ' data-find="' + esc(norm(u.name + ' ' + u.id)) + '"' : '') + '>' + avatar(u.id, u.name) +
+    return '<button type="button" class="row row-btn acct-row" data-act="admin-user" data-id="' + esc(u.id) + '"' + (free ? ' data-find="' + esc(norm(u.name + ' ' + u.id)) + '"' : '') + '>' + avatar(u.id, u.name, '', u.avatar) +
       '<span class="two-line"><b>' + esc(u.name) + '</b><span>' + esc((free ? '@' + u.id + ' · ' : '') + st) + '</span></span>' +
       (u.plus && !u.admin ? '<span class="tag-plus">Plus</span>' : '') + icon('chev') + '</button>';
   }
@@ -2520,7 +2725,9 @@
       '<div class="row"><span class="row-label">Planner saved</span><span class="row-value">' + esc(u.updated_at ? ago(u.updated_at) + ' · ' + kb(u.size) : 'Nothing yet') + '</span></div>' +
       '<div class="row"><span class="row-label">MyIB Plus</span><span class="row-value">' + esc(plusTxt) + '</span></div>';
     var d = ' data-id="' + esc(u.id) + '"', code = RESET_CODES[u.id];
-    var body = grp(info) +
+    var body = (u.avatar ? '<div class="pfp-hero">' + avatar(u.id, u.name, 'xxl', u.avatar) + '</div>' +
+        grp(rButton('Remove Photo', 'admin-pfp-remove', d, 'danger'), '', 'Takes the photo down for everyone. ' + esc(u.name) + ' can upload a new one.') : '') +
+      grp(info) +
       (code && u.reset ? grp('<div class="row"><span class="row-label">' + (u.last_login ? 'Reset code' : 'Setup code') + '</span><span class="row-value reset-code">' + esc(code) + '</span></div>' +
           rButton(icon('copy') + 'Copy Code', 'admin-copy-code', d), 'Give this to ' + esc(u.name),
           (free ? 'They tap “I’m not in Sociales 2 IB”, then Log In with @' + esc(u.id) + '. MyIB asks for this code and a new password.'
@@ -2531,6 +2738,8 @@
           'Download saves their planner as a file you can send them; they open it with Settings → Import Backup. Restore puts a backup file back into their account.') +
       (u.admin ? '' :
         grp(rButton(icon('star') + (u.plus ? 'Remove Plus' : 'Give Plus'), 'admin-plus', d + ' data-on="' + (u.plus ? '0' : '1') + '"')) +
+        (u.claimed ? grp(rButton(icon('chat') + (u.chat_off ? 'Turn On Chat' : 'Turn Off Chat'), 'admin-chat', d + ' data-off="' + (u.chat_off ? '0' : '1') + '"', u.chat_off ? '' : 'danger-text'), '',
+          u.chat_off ? 'Chat is off: ' + esc(u.name) + ' can read chats but can’t send messages or start chats.' : 'Stops ' + esc(u.name) + ' from sending messages or starting chats. They can still read them.') : '') +
         (u.claimed || u.reset ?
           grp((u.claimed ? rButton('Reset Password', 'admin-reset', d, 'danger') : rButton('Make a New Code', 'admin-reset', d, 'danger')) +
               (u.updated_at ? rButton('Erase Planner', 'admin-erase', d, 'danger') : ''), '',
@@ -2665,6 +2874,1562 @@
   }
   function refocus(sel) { var el = $(sel); if (el) el.focus(); }
 
+  /* =========================================================
+     The iPhone app. MyIB for iOS shows this page and sets window.MyIBNative before it loads.
+     This page sends it the timetable for the Home Screen widget and the dates for
+     deadline reminders; the app sends back its answers through MyIBNativeReply.
+     ========================================================= */
+  var NATIVE = (function () {
+    var n = window.MyIBNative, w = window.webkit;
+    return n && typeof n === 'object' && w && w.messageHandlers && w.messageHandlers.myib ? n : null;
+  })();
+  function toNative(msg) {
+    if (!NATIVE) return;
+    try { window.webkit.messageHandlers.myib.postMessage(msg); } catch (e) { /* ignore */ }
+  }
+  /* Apple lets an app link to paying on the web only in some App Store countries (the app decides).
+     The website always shows Plus and Support the Dev. */
+  function sellHere() { return !NATIVE || NATIVE.links === true; }
+  function openWeb(which) { toNative({ type: 'open', url: location.origin + '/?open=' + which }); }
+
+  /* reminders: on or off per phone, and the time of day */
+  var REMIND_TIMES = [['17:00', '17:00'], ['18:00', '18:00'], ['19:00', '19:00'], ['20:00', '20:00'], ['21:00', '21:00']];
+  function remindPrefs() {
+    var r = ME ? sjson('myib:remind:' + ME.id) || {} : {};
+    return { on: r.on === true, asked: r.asked === true, time: REMIND_TIMES.some(function (x) { return x[0] === r.time; }) ? r.time : '19:00' };
+  }
+  function saveRemind(r) { if (ME) sset('myib:remind:' + ME.id, JSON.stringify({ on: !!r.on, asked: !!r.asked, time: r.time })); }
+
+  var nativeTimer = null, nativeLast = '';
+  function nativeSoon() {
+    if (!NATIVE || !ME || MODE !== 'app') return;
+    clearTimeout(nativeTimer);
+    nativeTimer = setTimeout(nativeSync, 1200);
+  }
+  /* the next 8 days of classes, the next deadlines and exams, and every exam date (for the countdown) */
+  function nativeSync(force) {
+    clearTimeout(nativeTimer); nativeTimer = null;
+    if (!NATIVE || !ME || MODE !== 'app') return;
+    var t = today(), days = [];
+    for (var i = 0; i < 8; i++) {
+      var d = addDays(t, i);
+      days.push({ date: d, lessons: blocksFor(d).map(function (b) { return { start: b.start, end: b.end, name: b.s.name, short: b.s.short, color: b.s.color }; }) });
+    }
+    var soon = S.events.filter(function (e) { return (e.type === 'deadline' || e.type === 'exam') && !e.done && e.start >= t; }).sort(byStart);
+    function colorOf(e) { var s = subj(e.subject); return s ? s.color : '#8E8E93'; }
+    var widget = {
+      name: ME.name, updated: 0, days: days,
+      due: soon.slice(0, 6).map(function (e) { return { date: e.start, title: evTitle(e), detail: evDetail(e) || '', type: e.type, color: colorOf(e) }; }),
+      exams: S.events.filter(function (e) { return e.type === 'exam'; }).map(function (e) { return e.start; }).sort(),
+      pet: petWidget()
+    };
+    var R = remindPrefs();
+    var reminders = {
+      on: R.on, time: R.time,
+      items: !R.on ? [] : soon.filter(function (e) { return diff(t, e.start) <= 120; }).slice(0, 60).map(function (e) {
+        var det = evDetail(e);
+        return { id: e.id, date: e.start, title: 'Tomorrow: ' + evTitle(e), body: (e.type === 'exam' ? 'Exam' : 'Deadline') + (det ? ' · ' + det : '') };
+      })
+    };
+    petImages();
+    var key = JSON.stringify([widget, reminders]);
+    if (key === nativeLast && !force) return;
+    nativeLast = key;
+    widget.updated = Date.now();
+    toNative({ type: 'sync', widget: widget, reminders: reminders });
+  }
+  /* the puppy for its widget: needs as saved (the widget counts down from 'at'), and pictures when its look changes */
+  function petWidget() {
+    var p = S.pet;
+    if (!p) return null;
+    var s = petState(p);
+    return { name: p.name, breed: (petBreed(p.breed) || {}).name || '', stage: petStageName(s.stage), food: p.food, water: p.water, fun: p.fun, at: p.at,
+      rateFood: PET_RATE.food, rateWater: PET_RATE.water, rateFun: PET_RATE.fun, treats: s.treats };
+  }
+  var PET_IMG = { key: '', busy: false };
+  function petImages() {
+    var p = S.pet;
+    if (!NATIVE || !p || !PETE || PET_IMG.busy) return;
+    var look = petLook(p), key = [look.breed, look.coat, look.stage, look.wear.neck, look.wear.head, look.wear.face].join('|');
+    if (key === PET_IMG.key) return;
+    PET_IMG.busy = true;
+    var out = {};
+    Promise.all(['happy', 'sad', 'sleep'].map(function (pose) { return petPNG(look, pose).then(function (u) { if (u) out[pose] = u; }); })).then(function () {
+      PET_IMG.busy = false;
+      if (Object.keys(out).length !== 3 || !S.pet) return;
+      PET_IMG.key = key;
+      toNative({ type: 'petimg', key: key, images: out });
+    });
+  }
+  function petPNG(look, pose) {
+    return new Promise(function (resolve) {
+      var svg = PETE.svg({ breed: look.breed, coat: look.coat, stage: look.stage, wear: look.wear, pose: pose, frame: 150, width: 360 });
+      var m = /width="(\d+)" height="(\d+)"/.exec(svg), w = m ? Number(m[1]) : 360, h = m ? Number(m[2]) : 324;
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var c = document.createElement('canvas');
+          c.width = w; c.height = h;
+          c.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(c.toDataURL('image/png'));
+        } catch (e) { resolve(null); }
+      };
+      img.onerror = function () { resolve(null); };
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    });
+  }
+  /* the app answers here: the notification permission, or new info (like whether pay links are allowed) */
+  window.MyIBNativeReply = function (m) {
+    if (!NATIVE || !m || typeof m !== 'object') return;
+    if (m.type === 'permission') {
+      var R = remindPrefs();
+      R.on = m.ok === true; R.asked = true;
+      saveRemind(R);
+      nativeSync(true);
+      if (m.ok === true) toast('Reminders are on');
+      else toast('Notifications are off for MyIB. Turn them on in the Settings app, then try again.');
+      if (dlg.open && curSheet === openSettings) openSettings();
+    } else if (m.type === 'info' && m.info && typeof m.info === 'object') {
+      if (typeof m.info.links === 'boolean') NATIVE.links = m.info.links;
+      if (MODE === 'app' && ME) { if (dlg.open && curSheet === openSettings) openSettings(); else if (!dlg.open) softRender(); }
+    }
+  };
+  /* the widget and the reminders open a section: MyIBNativeOpen('calendar', '2027-05-13') */
+  window.MyIBNativeOpen = function (tab, date) {
+    if (MODE !== 'app' || !ME) return;
+    tab = isView(tab) ? tab : 'today';
+    if (tab === 'calendar' && typeof date === 'string' && DATE.test(date)) { UI.calSel = date; UI.calMonth = date.slice(0, 7); }
+    closeDialog();
+    go(tab);
+  };
+  function remindTurnOn() { toNative({ type: 'permission' }); }
+  function remindAsk() {
+    if (!NATIVE || !ME || remindPrefs().asked) return;
+    var tries = 0;
+    setTimeout(function tryAsk() {
+      if (!ME || MODE !== 'app' || remindPrefs().asked) return;
+      if (dlg.open || !idle() || guideBusy() || document.hidden) { if (++tries < 30) setTimeout(tryAsk, 5000); return; }
+      var R = remindPrefs();
+      R.asked = true; saveRemind(R);
+      openDialog({
+        title: 'Reminders',
+        body: '<div class="plus-hero"><span class="plus-badge bell">' + icon('bell') + '</span><h3>Never miss a deadline</h3>' +
+            '<p>MyIB can send you a notification the day before each deadline and exam. You pick the time in Settings.</p></div>' +
+          grp('<p class="row info-text">Add the MyIB widget too: touch and hold your Home Screen, tap Edit, then Add Widget, and pick MyIB. It shows your next class and the days left to your exams.</p>', 'Widget'),
+        submitLabel: 'Turn On',
+        onSubmit: function () { remindTurnOn(); return true; }
+      });
+    }, 2500);
+  }
+  function remindGroup() {
+    if (!NATIVE) return '';
+    var R = remindPrefs();
+    return grp(rSwitch('Deadline Reminders', 'remind', 's-remind', R.on) +
+        '<div class="remind-time"' + (R.on ? '' : ' hidden') + '>' + rSelect('Time', 'rtime', 's-rtime', optionList(REMIND_TIMES, R.time)) + '</div>',
+      'Reminders', 'A notification the day before each deadline and exam.');
+  }
+  /* Plus and Support the Dev: in the app they open myib.app in Safari, where Apple allows it */
+  function shopGroup(p) {
+    if (!NATIVE) return grp(rNav('star', p ? 'MyIB Plus' : 'Get MyIB Plus', 'plus-open', p ? 'On' : '') + rNav('heart', 'Support the Dev', 'support-open'));
+    var web = function (ic, label, act) {
+      return '<button type="button" class="row row-btn nav-row" data-act="' + act + '">' + icon(ic) + '<span class="row-label">' + esc(label) + '</span><span class="row-meta">myib.app</span>' + icon('out') + '</button>';
+    };
+    var rows = (p ? rNav('star', 'MyIB Plus', 'plus-open', 'On') : sellHere() ? web('star', 'Get MyIB Plus', 'plus-open') : '') +
+      (sellHere() ? web('heart', 'Support the Dev', 'support-open') : '');
+    return rows ? grp(rows, '', sellHere() ? 'Opens the MyIB website in Safari.' : '') : '';
+  }
+  function legalLinks() {
+    return '<a class="row row-btn nav-row" href="/privacy" target="_blank" rel="noopener">' + icon('shield') + '<span class="row-label">Privacy Policy</span>' + icon('out') + '</a>' +
+      '<a class="row row-btn nav-row" href="/support" target="_blank" rel="noopener">' + icon('info') + '<span class="row-label">Help and Contact</span>' + icon('out') + '</a>';
+  }
+
+  /* chat rules: once per person and device, before the first chat */
+  var CHAT_RULES = [
+    'Be kind. No bullying, insults, hate, threats or sexual content.',
+    'Don’t share other people’s photos, phone numbers or private details.',
+    'MyIB blocks some offensive words.',
+    'Report messages that break these rules. Mauro reads every report, deletes what breaks them and can turn off chat for anyone who does.',
+    'Block anyone you don’t want to hear from.'
+  ];
+  function chatAgreed() { return !!(ME && sget('myib:chatok:' + ME.id)); }
+  function chatRulesHTML() {
+    return '<section class="card chat-rules" aria-labelledby="cr-h"><span class="plus-badge">' + icon('chat') + '</span><h1 id="cr-h">Chat rules</h1>' +
+      '<ul class="cr-list">' + CHAT_RULES.map(function (r) { return '<li>' + icon('check') + '<span>' + esc(r) + '</span></li>'; }).join('') + '</ul>' +
+      '<p class="cr-foot">MyIB has zero tolerance for objectionable content and abusive users.</p>' +
+      '<button type="button" class="btn primary cr-go" data-act="chat-agree">I Agree</button>' +
+      '<a class="link cr-more" href="/privacy#chat" target="_blank" rel="noopener">Read the full rules</a></section>';
+  }
+
+  /* =========================================================
+     Chat: direct messages, groups and the Suggestions channel.
+     The server can't push, so the app asks for news: every 3 s in an open chat while
+     people are talking, slower when it goes quiet, once a minute elsewhere (for the
+     badge), and never while MyIB is in the background.
+     ========================================================= */
+  var CHANNEL = 'suggestions';
+  var CONV_RE = /^(dm:[a-z0-9_.]{1,20}:[a-z0-9_.]{1,20}|g:[A-Za-z0-9_-]{12}|suggestions)$/;
+  var OFFLINE_MSG = 'Can’t reach MyIB. Check your connection.';
+  var wideMq = window.matchMedia ? window.matchMedia('(min-width: 761px)') : { matches: true };
+  var CHAT = freshChat(), tmpN = 0, MSG_SEL = null;
+  function freshChat() {
+    return {
+      gen: (CHAT ? CHAT.gen : 0) + 1, list: null, listAt: 0, listErr: false, listing: null,
+      open: null, pushed: false, rooms: {}, people: {}, blocked: [], dev: ADMIN_ID, off: false,
+      unread: 0, reports: 0, timer: null, active: 0, drafts: {}, dir: null, dirAt: 0, keep: null
+    };
+  }
+  function wideChat() { return wideMq.matches; }
+  function isView(t) { return t === 'chat' || TABS.some(function (x) { return x[0] === t; }); }
+  function parseHash(h) {
+    if (h === 'chat') return { tab: 'chat', conv: null };
+    if (h.indexOf('chat/') === 0) {
+      var id = '';
+      try { id = decodeURIComponent(h.slice(5)); } catch (e) { id = ''; }
+      return { tab: 'chat', conv: CONV_RE.test(id) ? id : null };
+    }
+    return { tab: TABS.some(function (t) { return t[0] === h; }) ? h : 'today', conv: null };
+  }
+  function chatHash() { return CHAT.open ? 'chat/' + encodeURIComponent(CHAT.open) : 'chat'; }
+  function room(id) {
+    return CHAT.rooms[id] || (CHAT.rooms[id] = { id: id, msgs: [], last: 0, since: 0, more: false, loaded: false, loading: null, fetching: false, info: null, err: '', needInfo: true, older: false });
+  }
+  function listEntry(id) { return (CHAT.list || []).filter(function (c) { return c.id === id; })[0] || null; }
+  function dmPartner(id) { var p = id.split(':'); return p[1] === ME.id ? p[2] : p[1]; }
+  function blockedId(id) { return CHAT.blocked.some(function (p) { return p.id === id; }); }
+
+  /* people: names and photos, as the server last sent them (name null: the account is gone) */
+  function learn(p) {
+    if (!p || typeof p.id !== 'string') return;
+    var o = CHAT.people[p.id] || (CHAT.people[p.id] = { id: p.id, name: undefined, avatar: null, free: KNOWN.indexOf(p.id) < 0 });
+    if (p.name !== undefined) o.name = p.name;
+    if (p.avatar !== undefined) o.avatar = p.avatar || null;
+    if (p.free !== undefined) o.free = !!p.free;
+  }
+  function who(id) { return CHAT.people[id] || { id: id, name: undefined, avatar: null, free: KNOWN.indexOf(id) < 0 }; }
+  function whoName(id) {
+    if (ME && id === ME.id) return ME.name;
+    var p = who(id);
+    return p.name || (p.name === null ? 'Deleted account' : '@' + id);
+  }
+  function youOr(id) { return ME && id === ME.id ? 'You' : whoName(id); }
+  function devTag(id) { return id && id === CHAT.dev ? '<span class="tag-dev">Dev</span>' : ''; }
+  function nameList(ids) {
+    var n = (Array.isArray(ids) ? ids : []).map(youOr);
+    return n.length < 2 ? n.join('') : n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1];
+  }
+
+  /* one chat as the list and the open chat both know it */
+  function convOf(id) {
+    var e = listEntry(id), rm = CHAT.rooms[id], i = rm && rm.info;
+    var kind = i ? i.kind : e ? e.kind : id === CHANNEL ? 'channel' : id.indexOf('dm:') === 0 ? 'dm' : 'group';
+    var people = (i ? i.people : e ? e.people : []).filter(function (p) { return p.id !== ME.id; });
+    var c = { id: id, kind: kind, name: i ? i.name : e ? e.name : null, state: i ? i.state : e ? e.state : 'in', people: people, off: CHAT.off || !!(i && i.off) };
+    if (kind === 'dm') { c.partner = dmPartner(id); c.blocked = i ? !!i.blocked : blockedId(c.partner); }
+    return c;
+  }
+  function convTitle(c) {
+    if (c.kind === 'channel') return 'Suggestions';
+    if (c.kind === 'dm') return whoName(c.partner);
+    if (c.name) return c.name;
+    var ps = c.people.filter(function (p) { return p.state !== 'left'; }).map(function (p) { return whoName(p.id); });
+    if (!ps.length) return 'Group';
+    return ps.length <= 3 ? ps.join(', ') : ps.slice(0, 2).join(', ') + ' and ' + (ps.length - 2) + ' more';
+  }
+  function convAvatar(c, size) {
+    if (c.kind === 'dm') return avatar(c.partner, whoName(c.partner), size, who(c.partner).avatar);
+    var ic = c.kind === 'channel' ? 'bulb' : 'users';
+    return '<span class="chat-ic ' + c.kind + (size ? ' ' + size : '') + '" aria-hidden="true">' + icon(ic) + '</span>';
+  }
+  function sysText(m) {
+    var o = {};
+    try { o = JSON.parse(m.body) || {}; } catch (e) { o = {}; }
+    var by = youOr(m.user);
+    if (o.t === 'new') return by + ' made ' + (o.name ? '“' + o.name + '”' : 'the group');
+    if (o.t === 'add') return by + ' added ' + nameList(o.who);
+    if (o.t === 'name') return o.name ? by + ' named the group “' + o.name + '”' : by + ' removed the group name';
+    if (o.t === 'left') return by + ' left';
+    if (o.t === 'join') return by + ' joined';
+    return '';
+  }
+  function preview(c) {
+    var l = c.last;
+    if (!l) return c.state === 'req' ? 'Wants to chat' : 'No messages yet';
+    if (l.sys) return sysText(l);
+    var mine = l.user === ME.id, text = l.del ? 'Message deleted' : String(l.body || '').replace(/\s+/g, ' ');
+    if (mine) return 'You: ' + text;
+    if (c.kind !== 'dm') return (l.name ? String(l.name).split(' ')[0] : 'Deleted account') + ': ' + text;
+    return text;
+  }
+
+  /* times */
+  function isoOf(ms) { return toISO(new Date(ms)); }
+  function fTime(ms) { var d = new Date(ms); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function listTime(ms) {
+    var day = isoOf(ms), n = diff(day, isoOf(Date.now()));
+    if (n <= 0) return fTime(ms);
+    if (n === 1) return 'Yesterday';
+    if (n < 7) return DAYS[dow(day)];
+    return fShort(day) + (day.slice(0, 4) !== isoOf(Date.now()).slice(0, 4) ? ' ' + day.slice(0, 4) : '');
+  }
+  function dayLabel(day) {
+    var n = diff(day, isoOf(Date.now()));
+    if (n <= 0) return 'Today';
+    if (n === 1) return 'Yesterday';
+    if (n < 7) return DAYS_LONG[dow(day)];
+    return fDay(day) + (day.slice(0, 4) !== isoOf(Date.now()).slice(0, 4) ? ' ' + day.slice(0, 4) : '');
+  }
+
+  /* ---------- asking the server ---------- */
+  function chatWake(ms) {
+    clearTimeout(CHAT.timer);
+    CHAT.timer = setTimeout(chatPoll, ms == null ? chatDelay() : ms);
+  }
+  function chatDelay() {
+    var quiet = Date.now() - CHAT.active;
+    if (UI.tab !== 'chat') return 60000;
+    if (CHAT.open) return quiet < 90000 ? 3000 : quiet < 300000 ? 8000 : 20000;
+    return quiet < 300000 ? 10000 : 30000;
+  }
+  function chatPoll() {
+    clearTimeout(CHAT.timer); CHAT.timer = null;
+    if (MODE !== 'app' || !ME || document.hidden) return;
+    var gen = CHAT.gen, jobs = [];
+    if (UI.tab === 'chat' && chatAgreed()) {
+      if (CHAT.open) jobs.push(roomPoll(CHAT.open));
+      var every = !CHAT.open || wideChat() ? 12000 : 45000;
+      if (Date.now() - CHAT.listAt > every) jobs.push(chatLoadList());
+    } else jobs.push(chatUnread());
+    Promise.all(jobs).then(next, next);
+    function next() { if (gen === CHAT.gen && !CHAT.timer) chatWake(); }
+  }
+  function chatUnread() {
+    var gen = CHAT.gen;
+    return api('GET', '/api/chat/unread', null, { timeout: 10000 }).then(function (r) {
+      if (gen !== CHAT.gen) return;
+      if (r.status === 200 && r.data) setUnread(r.data.unread, r.data.reports);
+      else if (r.status === 401) sessionLost();
+    }, function () {});
+  }
+  function countUnread() {
+    return (CHAT.list || []).filter(function (c) { return c.last_seq > c.read && (c.kind !== 'channel' || ME.admin); }).length;
+  }
+  function setUnread(n, reports) {
+    CHAT.unread = Math.max(0, Number(n) || 0);
+    if (typeof reports === 'number') CHAT.reports = reports;
+    paintBadge();
+  }
+  function paintBadge() {
+    var b = $('#chat-btn');
+    if (!b) return;
+    var n = ME ? CHAT.unread + (ME.admin ? CHAT.reports : 0) : 0, el = $('.chat-badge', b);
+    if (n > 0) {
+      if (!el) { el = document.createElement('span'); el.className = 'chat-badge'; el.setAttribute('aria-hidden', 'true'); b.appendChild(el); }
+      el.textContent = n > 99 ? '99+' : String(n);
+    } else if (el) el.remove();
+    b.setAttribute('aria-label', n ? 'Chats, ' + n + ' new' : 'Chats');
+    document.title = n ? '(' + n + ') MyIB' : 'MyIB';
+  }
+  function chatLoadList() {
+    if (CHAT.listing) return CHAT.listing;
+    var gen = CHAT.gen;
+    CHAT.listing = api('GET', '/api/chat/list', null, { timeout: 15000 }).then(function (r) {
+      if (gen !== CHAT.gen) return;
+      CHAT.listing = null;
+      if (r.status === 401) return sessionLost();
+      if (r.status !== 200 || !r.data || !Array.isArray(r.data.convs)) { CHAT.listErr = true; paintChatList(); return; }
+      var d = r.data;
+      CHAT.listErr = false; CHAT.listAt = Date.now();
+      CHAT.dev = d.dev || ADMIN_ID; CHAT.off = !!d.off;
+      CHAT.blocked = Array.isArray(d.blocked) ? d.blocked : [];
+      CHAT.blocked.forEach(learn);
+      CHAT.list = d.convs.filter(function (c) { return c && typeof c.id === 'string' && CONV_RE.test(c.id); });
+      CHAT.list.forEach(function (c) {
+        (c.people || []).forEach(learn);
+        if (c.last && c.last.user && c.kind !== 'dm') learn({ id: c.last.user, name: c.last.name });
+        /* the open chat may know newer messages than the list */
+        var rm = CHAT.rooms[c.id];
+        if (rm && rm.loaded) syncEntry(c, rm);
+      });
+      setUnread(countUnread(), d.reports);
+      paintChatList();
+      if (CHAT.open) { paintRoomHead(); paintRoomFoot(); }
+    }, function () {
+      if (gen !== CHAT.gen) return;
+      CHAT.listing = null; CHAT.listErr = true; paintChatList();
+    });
+    return CHAT.listing;
+  }
+  /* the list entry catches up with what the open chat has shown */
+  function syncEntry(e, rm) {
+    var top = null;
+    rm.msgs.forEach(function (m) { if (m.seq && (!top || m.seq > top.seq)) top = m; });
+    if (top && top.seq > e.last_seq) {
+      e.last_seq = top.seq; e.last_at = top.at;
+      e.last = { seq: top.seq, user: top.user, name: top.user ? whoName(top.user) : null, body: top.body, sys: top.sys, del: top.del };
+    }
+    if (rm.read > e.read) e.read = Math.min(rm.read, e.last_seq);
+  }
+  function syncList(id) {
+    var e = listEntry(id), rm = CHAT.rooms[id];
+    if (!rm) return;
+    if (!e) { if (CHAT.list && !CHAT.listing) chatLoadList(); return; }
+    syncEntry(e, rm);
+    setUnread(countUnread());
+    paintChatList();
+  }
+  function seeing(id) { return MODE === 'app' && UI.tab === 'chat' && CHAT.open === id && !document.hidden; }
+  function msgsUrl(id, q) { return '/api/chat/msgs?conv=' + encodeURIComponent(id) + q + (seeing(id) ? '&read=1' : ''); }
+
+  function roomLoad(id) {
+    var rm = room(id);
+    if (rm.loading) return rm.loading;
+    var gen = CHAT.gen;
+    rm.err = '';
+    rm.loading = api('GET', msgsUrl(id, '&full=1'), null, { timeout: 15000 }).then(function (r) {
+      rm.loading = null;
+      if (gen !== CHAT.gen) return;
+      if (r.status === 401) return sessionLost();
+      if (r.status === 404) return roomGone(id, true);
+      if (r.status !== 200 || !r.data || !Array.isArray(r.data.msgs)) { rm.err = 'load'; if (CHAT.open === id) paintMsgs(); return; }
+      var d = r.data;
+      rm.msgs = rm.msgs.filter(function (m) { return m.tmp && !m.seq; });
+      rm.last = 0;
+      takeMsgs(rm, d);
+      rm.more = !!d.more; rm.loaded = true; rm.since = d.now; rm.read = d.read || 0;
+      if (d.info) takeInfo(rm, d.info);
+      syncList(id);
+      if (CHAT.open === id && chatShown()) { paintRoomHead(); paintRoomFoot(); paintMsgs(); scrollRoom(); }
+    }, function () {
+      rm.loading = null;
+      if (gen !== CHAT.gen) return;
+      rm.err = 'load';
+      if (CHAT.open === id) paintMsgs();
+    });
+    return rm.loading;
+  }
+  function roomPoll(id) {
+    var rm = room(id);
+    if (!rm.loaded) return roomLoad(id);
+    if (rm.fetching || rm.loading) return Promise.resolve();
+    var gen = CHAT.gen;
+    rm.fetching = true;
+    return api('GET', msgsUrl(id, '&after=' + rm.last + '&since=' + rm.since + (rm.needInfo ? '&full=1' : '')), null, { timeout: 15000 }).then(function (r) {
+      rm.fetching = false;
+      if (gen !== CHAT.gen) return;
+      if (r.status === 401) return sessionLost();
+      if (r.status === 404) return roomGone(id, true);
+      if (r.status !== 200 || !r.data || !Array.isArray(r.data.msgs)) return;
+      var d = r.data, count = rm.msgs.length, gone = false;
+      takeMsgs(rm, d);
+      (d.deleted || []).forEach(function (seq) {
+        rm.msgs.forEach(function (m) { if (m.seq === seq && !m.del) { m.del = 1; m.body = ''; gone = true; } });
+      });
+      if (d.info) takeInfo(rm, d.info);
+      rm.since = d.now;
+      if (d.read > (rm.read || 0)) rm.read = d.read;
+      var fresh = rm.msgs.length > count;
+      if (fresh) CHAT.active = Date.now();
+      if (CHAT.open === id && chatShown() && (fresh || gone || d.info)) {
+        var end = nearBottom();
+        if (d.info) { paintRoomHead(); paintRoomFoot(); }
+        paintMsgs();
+        if (end) scrollRoom(); else if (fresh) showJump();
+      }
+      if (fresh || gone || d.read) syncList(id);
+    }, function () { rm.fetching = false; });
+  }
+  function takeMsgs(rm, d) {
+    var ppl = d.people || {};
+    Object.keys(ppl).forEach(function (k) { learn(ppl[k]); });
+    var bySeq = {};
+    rm.msgs.forEach(function (m) { if (m.seq) bySeq[m.seq] = m; });
+    (d.msgs || []).forEach(function (m) {
+      if (!m || !(m.seq > 0)) return;
+      if (m.seq > rm.last) rm.last = m.seq;
+      var have = bySeq[m.seq];
+      if (have) { have.body = m.body; have.del = m.del ? 1 : 0; have.at = m.at; have.pending = false; have.failed = false; return; }
+      if (!m.sys && m.user === ME.id) {
+        /* your own message, back from the server before its send finished */
+        var tmp = rm.msgs.filter(function (x) { return x.tmp && !x.seq && !x.failed && x.body === m.body; })[0];
+        if (tmp) { tmp.seq = m.seq; tmp.at = m.at; tmp.pending = false; bySeq[m.seq] = tmp; return; }
+      }
+      var x = { seq: m.seq, user: m.user, body: String(m.body || ''), at: m.at, sys: m.sys ? 1 : 0, del: m.del ? 1 : 0 };
+      rm.msgs.push(x); bySeq[m.seq] = x;
+      if (m.sys) rm.needInfo = true;
+    });
+    sortMsgs(rm);
+  }
+  function sortMsgs(rm) { rm.msgs.sort(function (a, b) { return (a.seq || 1e15 + a.n) - (b.seq || 1e15 + b.n); }); }
+  function takeInfo(rm, i) {
+    rm.info = i; rm.needInfo = false;
+    (i.people || []).forEach(learn);
+    if (typeof i.off === 'boolean') CHAT.off = i.off;
+    var e = listEntry(rm.id);
+    if (e) { e.state = i.state; e.name = i.name; e.people = (i.people || []).filter(function (p) { return p.id !== ME.id; }); }
+  }
+  /* a chat you left, deleted or were removed from */
+  function roomGone(id, quiet) {
+    delete CHAT.rooms[id];
+    if (CHAT.list) CHAT.list = CHAT.list.filter(function (c) { return c.id !== id; });
+    setUnread(countUnread());
+    if (CHAT.open === id) {
+      CHAT.open = null; CHAT.pushed = false;
+      if (UI.tab === 'chat') { try { history.replaceState(null, '', '#chat'); } catch (e) { /* ignore */ } }
+      if (quiet) toast('That chat isn’t available any more');
+      if (chatShown()) render();
+    } else paintChatList();
+  }
+
+  /* ---------- sending ---------- */
+  /* the same clean-up the server does, so your message matches its copy */
+  function tidy(v) {
+    var s = String(v).normalize('NFC').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, '');
+    return s.split('\n').map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  function chatSubmit() {
+    var ta = $('#chat-input'), id = CHAT.open;
+    if (!ta || !id) return;
+    var body = tidy(ta.value);
+    if (!body) { ta.focus(); return; }
+    if (Array.from(body).length > 2000) { toast('That’s over 2,000 characters. Send it in two parts.'); return; }
+    var rm = room(id);
+    var m = { tmp: true, n: ++tmpN, seq: 0, user: ME.id, body: body, at: Date.now(), sys: 0, del: 0, pending: true };
+    rm.msgs.push(m);
+    ta.value = ''; CHAT.drafts[id] = ''; grow(ta);
+    CHAT.active = Date.now();
+    paintMsgs(); scrollRoom();
+    postMsg(id, m, false);
+    chatWake(2500);
+  }
+  function postMsg(id, m, retry) {
+    var rm = room(id), gen = CHAT.gen;
+    m.pending = true; m.failed = false; m.err = ''; m.lost = false;
+    return api('POST', '/api/chat/send', { conv: id, body: m.body, retry: retry }, { timeout: 20000 }).then(function (r) {
+      if (gen !== CHAT.gen) return;
+      if (r.status === 200 && r.data && r.data.seq) {
+        var twin = rm.msgs.filter(function (x) { return x !== m && x.seq === r.data.seq; })[0];
+        if (twin) rm.msgs.splice(rm.msgs.indexOf(m), 1);
+        else { m.seq = r.data.seq; m.at = r.data.at || m.at; }
+        m.pending = false;
+        rm.read = Math.max(rm.read || 0, r.data.seq);
+        sortMsgs(rm);
+        if (CHAT.open === id) paintMsgs();
+        syncList(id);
+        return;
+      }
+      m.pending = false; m.failed = true;
+      var code = r.data && r.data.error;
+      if (r.status === 401) return sessionLost();
+      if (r.status === 404 && code === 'conv') return roomGone(id, true);
+      if (code === 'words') {
+        /* back into the typing box, so they can change it */
+        rm.msgs = rm.msgs.filter(function (x) { return x !== m; });
+        var ta = CHAT.open === id && $('#chat-input');
+        if (ta && !ta.value) { ta.value = m.body; CHAT.drafts[id] = m.body; grow(ta); }
+        if (CHAT.open === id) paintMsgs();
+        toast('MyIB doesn’t allow some words in that message. Keep it kind.');
+        return;
+      }
+      m.err = sendError(r, id);
+      if (code === 'chat_off') CHAT.off = true;
+      if (code === 'blocked' || code === 'chat_off' || code === 'request') { rm.needInfo = true; chatWake(300); }
+      if (CHAT.open === id) paintMsgs();
+    }, function () {
+      if (gen !== CHAT.gen) return;
+      m.pending = false; m.failed = true; m.lost = true;
+      m.err = 'Not sent. Check your connection, then tap to try again.';
+      if (CHAT.open === id) paintMsgs();
+    });
+  }
+  function sendError(r, id) {
+    var code = r.data && r.data.error, wait = r.data && r.data.wait;
+    if (r.status === 429) return id === CHANNEL && wait > 15 ? 'You can post 10 suggestions an hour. Try again in ' + wait + ' min.' : 'Too many messages. Wait ' + (wait || 1) + ' min, then tap to try again.';
+    if (code === 'blocked') return 'You can’t message ' + whoName(dmPartner(id)) + '.';
+    if (code === 'chat_off') return 'Mauro turned off chat for your account.';
+    if (code === 'request') return 'Accept the request first.';
+    if (code === 'long') return 'Too long. A message can have up to 2,000 characters.';
+    if (code === 'words') return 'Not sent: MyIB doesn’t allow some words in it. Keep it kind.';
+    return 'Not sent. Tap to try again.';
+  }
+
+  /* ---------- drawing ---------- */
+  function chatShown() { return MODE === 'app' && UI.tab === 'chat' && !!$('#chat'); }
+  VIEWS.chat = function () {
+    if (!chatAgreed()) return chatRulesHTML();
+    return '<div class="chat' + (CHAT.open ? ' has-open' : '') + '" id="chat">' +
+      '<section class="chat-side glass" aria-labelledby="chat-h">' +
+        '<header class="chat-side-head"><h1 id="chat-h">Chats</h1><button type="button" class="btn small" data-act="chat-new">' + icon('compose') + 'New</button></header>' +
+        '<div class="chat-list" id="chat-list">' + chatListHTML() + '</div>' +
+      '</section>' +
+      '<section class="chat-main glass" id="chat-main" aria-label="Chat">' + roomHTML() + '</section>' +
+    '</div>';
+  };
+  function chatListHTML() {
+    if (!CHAT.list) {
+      return CHAT.listErr ? '<div class="cl-empty"><p>Can’t load your chats. Check your connection.</p><button type="button" class="btn small" data-act="chat-reload">Try Again</button></div>'
+                          : '<div class="sheet-loading" role="status"><span class="spinner" aria-hidden="true"></span><span class="sr">Loading</span></div>';
+    }
+    var reqs = CHAT.list.filter(function (c) { return c.state === 'req'; });
+    var rest = CHAT.list.filter(function (c) { return c.state !== 'req'; }).sort(function (a, b) {
+      return (b.kind === 'channel') - (a.kind === 'channel') || (b.last_at || 0) - (a.last_at || 0);
+    });
+    var html = '';
+    if (ME.admin && CHAT.reports) html += '<button type="button" class="cl-alert" data-act="admin-reports">' + icon('flag') + '<span>' + CHAT.reports + (CHAT.reports === 1 ? ' reported message' : ' reported messages') + '</span>' + icon('chev') + '</button>';
+    if (CHAT.off) html += '<p class="cl-note">Mauro turned off chat for your account. You can still read your chats.</p>';
+    if (reqs.length) html += '<p class="cl-head">Requests</p>' + reqs.map(clItem).join('') + '<p class="cl-head">Chats</p>';
+    html += rest.map(clItem).join('');
+    if (!rest.some(function (c) { return c.kind !== 'channel'; }) && !reqs.length) {
+      html += '<div class="cl-empty"><p><b>No chats yet</b></p><p>Tap New to message someone from your class or start a group.</p></div>';
+    }
+    if (CHAT.blocked.length) html += '<button type="button" class="cl-blocked" data-act="chat-blocked">' + icon('block') + 'Blocked · ' + CHAT.blocked.length + '</button>';
+    return html;
+  }
+  function clItem(e) {
+    var c = convOf(e.id), unread = e.last_seq > e.read;
+    return '<button type="button" class="cl-item' + (unread ? ' unread' : '') + '" data-act="chat-open" data-id="' + esc(e.id) + '"' + (e.id === CHAT.open ? ' aria-current="true"' : '') + '>' +
+      convAvatar(c, 'md') +
+      '<span class="cl-text"><span class="cl-top"><span class="cl-name">' + esc(convTitle(c)) + '</span>' + (c.kind === 'dm' ? devTag(c.partner) : '') +
+        '<span class="cl-time">' + esc(e.last && e.last_at ? listTime(e.last_at) : '') + '</span></span>' +
+      '<span class="cl-last"><span>' + esc(preview(e)) + '</span>' + (unread ? '<i class="cl-dot"><span class="sr">Unread</span></i>' : '') + '</span></span></button>';
+  }
+  function roomHTML() {
+    var id = CHAT.open;
+    if (!id) return '<div class="cm-empty">' + icon('chat') + '<p><b>Pick a chat</b></p><p>Or tap New to message someone from your class.</p></div>';
+    var rm = room(id);
+    return '<header class="cm-head" id="cm-head">' + roomHeadHTML(rm) + '</header>' +
+      '<div class="cm-msgs" id="cm-msgs" role="log" aria-label="Messages">' + msgsHTML(rm) + '</div>' +
+      '<button type="button" class="cm-jump" id="cm-jump" data-act="chat-jump" hidden>' + icon('down') + 'New messages</button>' +
+      '<footer class="cm-foot" id="cm-foot">' + roomFootHTML(rm) + '</footer>';
+  }
+  function roomHeadHTML(rm) {
+    var c = convOf(rm.id), sub;
+    if (c.kind === 'channel') sub = 'Ideas for MyIB · everyone can read';
+    else if (c.kind === 'dm') sub = who(c.partner).name === null ? 'Account deleted' : who(c.partner).free ? '@' + c.partner : 'Sociales 2 IB';
+    else {
+      var n = c.people.filter(function (p) { return p.state === 'in'; }).length + (c.state === 'in' ? 1 : 0);
+      sub = n + (n === 1 ? ' person' : ' people');
+    }
+    return '<button type="button" class="icon-btn cm-back" data-act="chat-back" aria-label="Back to chats">' + icon('left') + '</button>' +
+      '<button type="button" class="cm-title" data-act="chat-info" aria-label="' + esc(convTitle(c)) + ', chat info">' + convAvatar(c, 'sm') +
+        '<span class="two-line"><b>' + esc(convTitle(c)) + (c.kind === 'dm' ? devTag(c.partner) : '') + '</b><span>' + esc(sub) + '</span></span></button>' +
+      '<button type="button" class="icon-btn cm-info" data-act="chat-info" aria-label="Chat info" title="Chat info">' + icon('info') + '</button>';
+  }
+  function footKind(c) { return c.state === 'req' ? 'req' : c.off ? 'off' : c.kind === 'dm' && c.blocked ? 'blocked' : 'send'; }
+  function roomFootHTML(rm) {
+    var c = convOf(rm.id), k = footKind(c);
+    if (k === 'req') {
+      var p = c.kind === 'dm' ? c.partner : null;
+      return '<div class="cm-bar" data-k="req"><p>' + (p ? '<b>' + esc(whoName(p)) + '</b>' + (who(p).free ? ' (@' + esc(p) + ')' : '') + ' wants to chat with you.' : 'You’re invited to this group.') + ' Accept to reply.</p>' +
+        '<div class="cm-bar-btns"><button type="button" class="btn small danger" data-act="chat-decline">Delete</button>' +
+        (p ? '<button type="button" class="btn small" data-act="chat-block" data-id="' + esc(p) + '">Block</button>' : '') +
+        '<button type="button" class="btn small primary" data-act="chat-accept">Accept</button></div></div>';
+    }
+    if (k === 'off') return '<div class="cm-bar" data-k="off"><p>Mauro turned off chat for your account. You can still read your chats.</p></div>';
+    if (k === 'blocked') {
+      return '<div class="cm-bar" data-k="blocked"><p>You blocked ' + esc(whoName(c.partner)) + '.</p><div class="cm-bar-btns">' +
+        '<button type="button" class="btn small" data-act="chat-unblock" data-id="' + esc(c.partner) + '">Unblock</button></div></div>';
+    }
+    return '<form class="cm-compose" data-form="chat-send" data-k="send" autocomplete="off">' +
+      '<label class="sr" for="chat-input">Message</label>' +
+      '<textarea id="chat-input" rows="1" maxlength="2000" placeholder="' + (c.kind === 'channel' ? 'Share an idea for MyIB' : 'Message') + '">' + esc(CHAT.drafts[rm.id] || '') + '</textarea>' +
+      '<button type="submit" class="cm-send" aria-label="Send" title="Send">' + icon('up') + '</button></form>';
+  }
+  function emptyRoomHTML(c) {
+    if (c.kind === 'channel') {
+      return '<div class="cm-hello">' + convAvatar(c, 'lg') + '<p><b>Suggestions</b></p><p>Got an idea for MyIB? Post it here. Everyone with an account can read it and reply, and Mauro reads them all.</p></div>';
+    }
+    if (c.kind === 'dm') {
+      var p = c.partner, req = who(p).free || isFree();
+      return '<div class="cm-hello">' + avatar(p, whoName(p), 'lg', who(p).avatar) + '<p><b>' + esc(whoName(p)) + '</b></p><p>' +
+        (req ? 'Your first message reaches ' + esc(whoName(p)) + ' as a request.' : 'Say hi to ' + esc(whoName(p)) + '.') + '</p></div>';
+    }
+    return '<div class="cm-hello"><p>No messages yet.</p></div>';
+  }
+  function msgsHTML(rm) {
+    if (!rm.loaded) {
+      return rm.err ? '<div class="cm-hello"><p>Couldn’t load this chat.</p><button type="button" class="btn small" data-act="chat-reload">Try Again</button></div>'
+                    : '<div class="sheet-loading" role="status"><span class="spinner" aria-hidden="true"></span><span class="sr">Loading</span></div>';
+    }
+    var c = convOf(rm.id), group = c.kind !== 'dm', out = [];
+    if (rm.more) out.push('<button type="button" class="cm-older" data-act="chat-older"' + (rm.older ? ' disabled' : '') + '>' + (rm.older ? 'Loading…' : 'Show Earlier Messages') + '</button>');
+    /* in groups and Suggestions, messages from people you blocked stay hidden */
+    var list = rm.msgs.filter(function (m) { return m.sys || !group || m.user === ME.id || !blockedId(m.user); });
+    if (!list.some(function (m) { return !m.sys; }) && !rm.more) out.push(emptyRoomHTML(c));
+    var prevDay = '', prev = null;
+    list.forEach(function (m, i) {
+      var day = isoOf(m.at);
+      if (day !== prevDay) { out.push('<p class="msg-day">' + esc(dayLabel(day)) + '</p>'); prevDay = day; prev = null; }
+      if (m.sys) { var t = sysText(m); if (t) out.push('<p class="msg-note">' + esc(t) + '</p>'); prev = null; return; }
+      var next = list[i + 1], mine = m.user === ME.id;
+      var first = !prev || prev.user !== m.user || m.at - prev.at > 300000;
+      var last = !next || next.sys || next.user !== m.user || next.at - m.at > 300000 || isoOf(next.at) !== day || m.failed;
+      var h = '';
+      if (group && !mine && first) h += '<p class="msg-who">' + esc(whoName(m.user)) + devTag(m.user) + '</p>';
+      h += '<div class="msg' + (mine ? ' mine' : '') + (first ? ' first' : '') + (last ? ' last' : '') + (m.del ? ' del' : '') + (m.pending ? ' pending' : '') + (m.failed ? ' failed' : '') + '">';
+      if (group && !mine) {
+        h += last && who(m.user).name !== null ? '<button type="button" class="msg-av" data-act="chat-person" data-id="' + esc(m.user) + '" aria-label="' + esc(whoName(m.user)) + '">' + avatar(m.user, whoName(m.user), 'sm', who(m.user).avatar) + '</button>'
+                   : '<span class="msg-av" aria-hidden="true"></span>';
+      }
+      h += '<button type="button" class="bubble" data-act="chat-msg" data-seq="' + (m.seq || '') + '" data-tmp="' + (m.tmp ? m.n : '') + '">' +
+        (m.del ? esc(mine ? 'You deleted this message' : 'Message deleted') : esc(m.body)) + '</button></div>';
+      if (last) h += '<p class="msg-meta' + (mine ? ' mine' : '') + (m.failed ? ' err' : '') + (group && !mine ? ' indent' : '') + '">' + esc(m.failed ? m.err : m.pending ? 'Sending…' : fTime(m.at)) + '</p>';
+      out.push(h);
+      prev = m;
+    });
+    return out.join('');
+  }
+  function paintChatList() {
+    var el = chatShown() && $('#chat-list');
+    if (!el) return;
+    var t = el.scrollTop;
+    el.innerHTML = chatListHTML();
+    el.scrollTop = t;
+  }
+  function paintMsgs() {
+    var el = chatShown() && CHAT.open && $('#cm-msgs');
+    if (el) el.innerHTML = msgsHTML(room(CHAT.open));
+  }
+  function paintRoomHead() {
+    var el = chatShown() && CHAT.open && $('#cm-head');
+    if (el) el.innerHTML = roomHeadHTML(room(CHAT.open));
+  }
+  /* the typing box is only swapped when the footer changes kind, so focus and text stay */
+  function paintRoomFoot() {
+    var el = chatShown() && CHAT.open && $('#cm-foot');
+    if (!el) return;
+    var cur = el.firstElementChild, k = footKind(convOf(CHAT.open));
+    if (cur && cur.dataset.k === k && k === 'send') return;
+    el.innerHTML = roomFootHTML(room(CHAT.open));
+    var ta = $('#chat-input');
+    if (ta) grow(ta);
+  }
+  function nearBottom() { var b = $('#cm-msgs'); return !b || b.scrollHeight - b.scrollTop - b.clientHeight < 90; }
+  function scrollRoom() { var b = $('#cm-msgs'); if (b) b.scrollTop = b.scrollHeight; hideJump(); }
+  function showJump() { var j = $('#cm-jump'); if (j) j.hidden = false; }
+  function hideJump() { var j = $('#cm-jump'); if (j) j.hidden = true; }
+  function grow(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 140) + 'px'; }
+  /* the chat fills the window: its height on big screens; on phones the open chat covers the screen above the keyboard */
+  function sizeChat() {
+    var el = $('#chat');
+    if (!el) return;
+    if (wideChat()) el.style.height = Math.max(440, Math.round(window.innerHeight - (el.getBoundingClientRect().top + window.scrollY) - 20)) + 'px';
+    else el.style.height = '';
+    chatViewport();
+  }
+  function chatViewport() {
+    var vv = window.visualViewport, root = document.documentElement;
+    if (!vv) return;
+    root.style.setProperty('--vv-h', Math.round(vv.height) + 'px');
+    root.style.setProperty('--vv-top', Math.round(vv.offsetTop) + 'px');
+    document.body.classList.toggle('kb-open', vv.height < window.innerHeight - 120);
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', function () { if (chatShown()) chatViewport(); });
+    window.visualViewport.addEventListener('scroll', function () { if (chatShown()) chatViewport(); });
+  }
+  window.addEventListener('resize', function () { if (chatShown()) sizeChat(); });
+  if (wideMq.addEventListener) wideMq.addEventListener('change', function () { if (chatShown()) render(); });
+  document.addEventListener('scroll', function (e) { if (e.target && e.target.id === 'cm-msgs' && nearBottom()) hideJump(); }, true);
+  /* after the chat view is drawn */
+  function chatMounted() {
+    document.body.classList.toggle('chat-conv', !!CHAT.open);
+    sizeChat();
+    var ta = $('#chat-input');
+    if (ta) { grow(ta); if (document.activeElement === ta) { var n = ta.value.length; ta.setSelectionRange(n, n); } }
+    var box = $('#cm-msgs'), k = CHAT.keep;
+    CHAT.keep = null;
+    if (box) box.scrollTop = k && k.id === CHAT.open && !k.end ? k.top : box.scrollHeight;
+    if (!CHAT.list || Date.now() - CHAT.listAt > 12000) chatLoadList();
+    var rm = CHAT.open && room(CHAT.open);
+    if (rm && !rm.loaded && !rm.loading) roomLoad(CHAT.open);
+  }
+  function chatKeep() {
+    var box = $('#cm-msgs');
+    CHAT.keep = box && CHAT.open ? { id: CHAT.open, top: box.scrollTop, end: nearBottom() } : null;
+  }
+
+  /* ---------- moving around ---------- */
+  function chatOpen(id) {
+    if (!id || !CONV_RE.test(id)) return;
+    var wasOpen = CHAT.open;
+    CHAT.open = id;
+    CHAT.active = Date.now();
+    UI.tab = 'chat';
+    var h = '#' + chatHash();
+    if (location.hash !== h) {
+      try {
+        /* phones: Back closes the chat; big screens swap chats in place */
+        if (wideChat() || (wasOpen && CHAT.pushed)) history.replaceState(null, '', h);
+        else { history.pushState(null, '', h); CHAT.pushed = true; }
+      } catch (e) { /* ignore */ }
+    }
+    render();
+    var rm = room(id);
+    if (!rm.loaded) roomLoad(id);
+    else { scrollRoom(); roomPoll(id); }
+    var ta = $('#chat-input');
+    if (ta && !coarse.matches) ta.focus({ preventScroll: true });
+    chatWake();
+  }
+  function chatBack() {
+    if (CHAT.pushed) { history.back(); return; }
+    CHAT.open = null;
+    try { history.replaceState(null, '', '#chat'); } catch (e) { /* ignore */ }
+    render();
+  }
+  function chatStartDm(id) {
+    api('POST', '/api/chat/dm', { user: id }).then(function (r) {
+      if (r.status === 200 && r.data && r.data.conv) { closeDialog(); chatOpen(r.data.conv); chatLoadList(); return; }
+      if (r.status === 401) return sessionLost();
+      var code = r.data && r.data.error;
+      toast(code === 'blocked' ? 'You can’t message ' + whoName(id) + '.' : code === 'chat_off' ? 'Mauro turned off chat for your account.' :
+        r.status === 429 ? 'Too many new chats. Try again later.' : 'Couldn’t start the chat. Try again.');
+    }, function () { toast(OFFLINE_MSG); });
+  }
+  function chatOlder() {
+    var id = CHAT.open, rm = id && room(id);
+    if (!rm || rm.older || !rm.more) return;
+    var first = rm.msgs.filter(function (m) { return m.seq; })[0];
+    if (!first) return;
+    rm.older = true; paintMsgs();
+    var gen = CHAT.gen;
+    api('GET', '/api/chat/msgs?conv=' + encodeURIComponent(id) + '&before=' + first.seq).then(function (r) {
+      rm.older = false;
+      if (gen !== CHAT.gen) return;
+      if (r.status === 200 && r.data && Array.isArray(r.data.msgs)) { takeMsgs(rm, r.data); rm.more = !!r.data.more; }
+      else toast('Couldn’t load earlier messages. Try again.');
+      var box = CHAT.open === id && $('#cm-msgs');
+      if (!box) return;
+      var h = box.scrollHeight, t = box.scrollTop;
+      paintMsgs();
+      box.scrollTop = box.scrollHeight - h + t;
+    }, function () { rm.older = false; paintMsgs(); toast(OFFLINE_MSG); });
+  }
+  function findMsg(el) {
+    var rm = CHAT.open && CHAT.rooms[CHAT.open];
+    if (!rm) return null;
+    var seq = Number(el.dataset.seq), n = Number(el.dataset.tmp);
+    return rm.msgs.filter(function (m) { return seq ? m.seq === seq : m.tmp && m.n === n; })[0] || null;
+  }
+  function chatPost(path, body, okMsg, then) {
+    return api('POST', path, body).then(function (r) {
+      if (r.status === 200) { if (okMsg) toast(okMsg); if (then) then(r.data); return true; }
+      if (r.status === 401) { sessionLost(); return false; }
+      var code = r.data && r.data.error;
+      toast(r.status === 429 ? 'Too many changes. Try again in ' + ((r.data && r.data.wait) || 1) + ' min.' :
+        code === 'chat_off' ? 'Mauro turned off chat for your account.' : code === 'full' ? 'A group can have up to 50 people.' :
+        code === 'users' ? 'You can’t add those people.' : code === 'words' ? 'MyIB doesn’t allow some words in that name.' : 'Something went wrong. Try again.');
+      return false;
+    }, function () { toast(OFFLINE_MSG); return false; });
+  }
+
+  /* ---------- sheets ---------- */
+  function openMsg(el) {
+    var m = findMsg(el), id = CHAT.open;
+    if (!m || m.sys || m.del || m.pending) return;
+    var c = convOf(id), mine = m.user === ME.id, rows;
+    MSG_SEL = { conv: id, m: m };
+    if (m.failed) rows = rButton(icon('refresh') + 'Try Again', 'chat-retry') + rButton('Delete', 'chat-drop', '', 'danger');
+    else {
+      rows = rButton(icon('copy') + 'Copy Text', 'chat-copy');
+      if (!mine && c.kind !== 'dm' && who(m.user).name) rows += rButton(icon('chat') + 'Message ' + esc(whoName(m.user).split(' ')[0]), 'chat-dm', ' data-id="' + esc(m.user) + '"');
+      if (mine || (ME.admin && c.kind === 'channel')) rows += rButton('Delete Message', 'chat-unsend', '', 'danger');
+      if (!mine && !ME.admin) rows += rButton(icon('flag') + 'Report', 'chat-report', '', 'danger-text');
+    }
+    var d = new Date(m.at);
+    openDialog({
+      title: mine ? 'Your Message' : whoName(m.user),
+      body: '<div class="msg-quote">' + esc(m.body) + '</div><p class="msg-quote-time">' + esc(dayLabel(isoOf(m.at)) + ', ' + fTime(m.at) + (d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : '')) + '</p>' +
+        grp(rows, '', m.failed ? '' : mine ? 'Deleting removes it for everyone in the chat.' : !ME.admin ? 'Report sends this message to Mauro. The sender doesn’t find out.' : '')
+    });
+  }
+  function openChatInfo(id) {
+    id = id || CHAT.open;
+    if (!id) return;
+    var c = convOf(id);
+    curSheet = function () { openChatInfo(id); };
+    var body;
+    if (c.kind === 'channel') {
+      body = '<div class="pfp-hero">' + convAvatar(c, 'xl') + '<p class="hero-name">Suggestions</p></div>' +
+        grp('<p class="row info-text">Share ideas to make MyIB better. Everyone with a MyIB account can read them and reply. Keep it about MyIB and be kind. Mauro deletes messages that aren’t.</p>');
+    } else if (c.kind === 'dm') {
+      var p = c.partner, nm = whoName(p), gone = who(p).name === null;
+      body = '<div class="pfp-hero">' + avatar(p, nm, 'xxl', who(p).avatar) + '<p class="hero-name">' + esc(nm) + devTag(p) + '</p>' +
+          '<p class="hero-sub">' + esc(gone ? 'Account deleted' : who(p).free ? '@' + p : 'Sociales 2 IB') + '</p></div>' +
+        (gone ? '' : grp(c.blocked ? rButton('Unblock ' + esc(nm), 'chat-unblock', ' data-id="' + esc(p) + '"', 'center')
+                                   : rButton(icon('block') + 'Block ' + esc(nm), 'chat-block', ' data-id="' + esc(p) + '"', 'danger-text'), '',
+          c.blocked ? '' : 'They can’t message you or add you to groups, and you stop seeing their messages in groups. MyIB doesn’t tell them.')) +
+        grp(rButton('Delete Chat', 'chat-leave', '', 'danger'), '', 'Deletes the chat for you. ' + esc(nm) + ' keeps their copy.');
+    } else {
+      var inGroup = c.state === 'in' && !c.off;
+      var ppl = c.people.filter(function (x) { return x.state !== 'left'; }).sort(function (a, b) { return whoName(a.id).localeCompare(whoName(b.id)); });
+      var rows = (c.state === 'in' ? '<div class="row acct-row">' + avatar(ME.id, ME.name, '', ME.avatar) + '<span class="two-line"><b>You</b><span>' + esc(ME.name) + '</span></span></div>' : '') +
+        ppl.map(function (x) {
+          return '<button type="button" class="row row-btn acct-row" data-act="chat-person" data-id="' + esc(x.id) + '">' + avatar(x.id, whoName(x.id), '', who(x.id).avatar) +
+            '<span class="two-line"><b>' + esc(whoName(x.id)) + devTag(x.id) + '</b><span>' + esc(x.state === 'req' ? 'Invited' : who(x.id).free ? '@' + x.id : 'Sociales 2 IB') + '</span></span>' + icon('chev') + '</button>';
+        }).join('');
+      body = '<div class="pfp-hero">' + convAvatar(c, 'xl') + '<p class="hero-name">' + esc(convTitle(c)) + '</p></div>' +
+        (inGroup ? grp(rNav('', 'Group Name', 'chat-rename', c.name || 'None')) : '') +
+        grp(rows, 'People · ' + (ppl.length + (c.state === 'in' ? 1 : 0))) +
+        (inGroup ? grp(rButton(icon('plus') + 'Add People', 'chat-add')) : '') +
+        grp(rButton(c.state === 'req' ? 'Delete Invite' : 'Leave Group', 'chat-leave', '', 'danger'), '',
+          c.state === 'req' ? '' : 'You stop getting its messages. Someone in the group can add you back.');
+    }
+    openDialog({ title: c.kind === 'channel' ? 'About' : c.kind === 'dm' ? 'Chat Info' : 'Group Info', body: body });
+  }
+  function openChatPerson(id) {
+    if (!id || id === ME.id) return;
+    var p = who(id), nm = whoName(id), blocked = blockedId(id);
+    curSheet = function () { openChatPerson(id); };
+    openDialog({
+      title: nm,
+      body: '<div class="pfp-hero">' + avatar(id, nm, 'xxl', p.avatar) + '<p class="hero-name">' + esc(nm) + devTag(id) + '</p><p class="hero-sub">' + esc(p.free ? '@' + id : 'Sociales 2 IB') + '</p></div>' +
+        (p.name === null ? '' :
+          (blocked ? '' : grp(rButton(icon('chat') + 'Message', 'chat-dm', ' data-id="' + esc(id) + '"'))) +
+          grp(blocked ? rButton('Unblock ' + esc(nm), 'chat-unblock', ' data-id="' + esc(id) + '"', 'center')
+                      : rButton(icon('block') + 'Block ' + esc(nm), 'chat-block', ' data-id="' + esc(id) + '"', 'danger-text')))
+    });
+  }
+  function openRename(id) {
+    var c = convOf(id);
+    openDialog({
+      title: 'Group Name', back: function () { openChatInfo(id); }, backLabel: 'Group',
+      body: grp(rField({ label: 'Group name', name: 'gname', id: 'gn-name', max: 40, value: c.name || '', placeholder: 'Group name', autofocus: true }), '', 'Everyone in the group sees the new name.'),
+      submitLabel: 'Save',
+      onSubmit: function (fd, form) {
+        var name = clip(fd.get('gname'), 40);
+        if (busyForm(form, true)) return false;
+        chatPost('/api/chat/rename', { conv: id, name: name }, '', function () {
+          room(id).needInfo = true; chatWake(100);
+          var e = listEntry(id); if (e) e.name = name || null;
+          if (room(id).info) room(id).info.name = name || null;
+          paintChatList(); paintRoomHead();
+          openChatInfo(id);
+        }).then(function () { busyForm(form, false); });
+        return false;
+      }
+    });
+  }
+  function openBlocked() {
+    curSheet = openBlocked;
+    var rows = CHAT.blocked.map(function (p) {
+      return '<div class="row acct-row">' + avatar(p.id, whoName(p.id), '', p.avatar) + '<span class="two-line"><b>' + esc(whoName(p.id)) + '</b><span>' + esc(p.free ? '@' + p.id : 'Sociales 2 IB') + '</span></span>' +
+        '<button type="button" class="btn small" data-act="chat-unblock" data-id="' + esc(p.id) + '">Unblock</button></div>';
+    }).join('');
+    openDialog({ title: 'Blocked', body: rows ? grp(rows, '', 'They can’t message you or add you to groups. Unblock someone to let them reach you again.') : '<p class="group-foot">You haven’t blocked anyone.</p>' });
+  }
+
+  /* New Chat, and Add People for a group */
+  function openChatNew(opts) {
+    opts = opts || {};
+    var add = opts.add || null, skip = {};
+    if (add) convOf(add).people.forEach(function (p) { if (p.state !== 'left') skip[p.id] = 1; });
+    curSheet = function () { openChatNew(opts); };
+    var body = '<div class="chat-pick">' +
+      grp('<label class="row"><span class="sr">Search your class</span><input class="row-field" type="search" id="cn-q" placeholder="Search your class" autocomplete="off" autocapitalize="off" spellcheck="false"></label>') +
+      '<div id="cn-people"><div class="sheet-loading" role="status"><span class="spinner" aria-hidden="true"></span><span class="sr">Loading</span></div></div>' +
+      '<p class="group-head">Other students</p><div class="group" id="cn-found">' +
+        '<div class="row cn-find"><span class="sr">Username</span><input class="row-field" type="text" id="cn-find" placeholder="Their username" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="21">' +
+        '<button type="button" class="btn small" data-act="chat-find">Find</button></div></div>' +
+      '<p class="group-foot" id="cn-find-msg">Find someone outside Sociales 2 IB by their exact username. Your first message reaches them as a request.</p>' +
+      (add ? '' : '<div id="cn-name" hidden>' + grp(rField({ label: 'Group name', name: 'gname', id: 'cn-gname', max: 40, value: '', placeholder: 'Group name (optional)' }), 'Group') + '</div>') +
+      '</div>';
+    openDialog({
+      title: add ? 'Add People' : 'New Chat', body: body, submitLabel: add ? 'Add' : 'Chat',
+      back: add ? function () { openChatInfo(add); } : null, backLabel: 'Group',
+      onSubmit: function (fd, form) { return chatNewSubmit(fd, form, add); }
+    });
+    pickChanged();
+    var gen = CHAT.gen;
+    loadDir().then(function (list) {
+      var box = gen === CHAT.gen && dlg.open && $('#cn-people', dlg);
+      if (!box) return;
+      var ppl = list.filter(function (p) { return !skip[p.id]; });
+      box.innerHTML = ppl.length ? grp(ppl.map(function (p) { return pickRow(p, false); }).join(''), 'Sociales 2 IB') :
+        '<p class="group-head">Sociales 2 IB</p><p class="group-foot">' + (add ? 'Everyone from the class with an account is already here.' : 'Nobody else from the class has an account yet.') + '</p>';
+      var q = $('#cn-q', dlg);
+      if (q && q.value) filterPick(q.value);
+    }, function () {
+      var box = dlg.open && $('#cn-people', dlg);
+      if (box) box.innerHTML = '<p class="group-foot err">' + esc(OFFLINE_MSG) + '</p>';
+    });
+  }
+  function loadDir() {
+    if (CHAT.dir && Date.now() - CHAT.dirAt < 300000) return Promise.resolve(CHAT.dir);
+    return api('GET', '/api/chat/people').then(function (r) {
+      if (r.status === 200 && r.data && Array.isArray(r.data.people)) {
+        CHAT.dir = r.data.people; CHAT.dirAt = Date.now();
+        if (r.data.dev) CHAT.dev = r.data.dev;
+        CHAT.dir.forEach(learn);
+        return CHAT.dir;
+      }
+      throw new Error('people ' + r.status);
+    });
+  }
+  function pickRow(p, on) {
+    var nm = p.name || p.id;
+    return '<label class="row pick cn-row" data-find="' + esc(norm(nm + ' ' + p.id)) + '"><input type="checkbox" name="u" value="' + esc(p.id) + '"' + (on ? ' checked' : '') + '>' +
+      avatar(p.id, nm, '', p.avatar) + '<span class="two-line"><b>' + esc(nm) + devTag(p.id) + '</b><span>' + esc(p.free ? '@' + p.id : 'Sociales 2 IB') + '</span></span>' + icon('tick') + '</label>';
+  }
+  function filterPick(q) {
+    q = norm(String(q).trim());
+    $$('#cn-people .cn-row', dlg).forEach(function (r) { r.hidden = !!q && r.dataset.find.indexOf(q) < 0; });
+  }
+  function pickChanged() {
+    var n = $$('input[name="u"]:checked', dlg).length, add = $('#cn-name', dlg) === null;
+    var b = $('.sheet-head [type="submit"]', dlg);
+    if (b) { b.disabled = !n; b.textContent = add ? 'Add' : n > 1 ? 'Create' : 'Chat'; }
+    var nm = $('#cn-name', dlg);
+    if (nm) nm.hidden = n < 2;
+  }
+  function chatFindRun() {
+    var inp = $('#cn-find', dlg), note = $('#cn-find-msg', dlg);
+    if (!inp) return;
+    var v = inp.value.trim().replace(/^@/, '').toLowerCase();
+    if (!v) { inp.focus(); return; }
+    function say(t, err) { if (note) { note.textContent = t; note.classList.toggle('err', !!err); } }
+    say('Looking…');
+    api('GET', '/api/chat/find?u=' + encodeURIComponent(v)).then(function (r) {
+      if (!dlg.open || !$('#cn-find', dlg)) return;
+      if (r.status === 429) return say('Too many searches. Try again later.', true);
+      var p = r.status === 200 && r.data ? r.data.person : null;
+      if (!p) return say(v === ME.id ? 'That’s you.' : 'Nobody has the username @' + v + '.', true);
+      learn(p);
+      var box = $('#cn-found', dlg), there = $$('input[name="u"]', dlg).filter(function (x) { return x.value === p.id; })[0];
+      if (there) there.checked = true;
+      else box.insertAdjacentHTML('beforeend', pickRow(p, true));
+      inp.value = '';
+      say((p.name || '@' + p.id) + ' is on the list.');
+      pickChanged();
+    }, function () { say(OFFLINE_MSG, true); });
+  }
+  function chatNewSubmit(fd, form, add) {
+    var users = fd.getAll('u').map(String);
+    if (!users.length || busyForm(form, true)) return false;
+    function done() { busyForm(form, false); }
+    if (add) {
+      chatPost('/api/chat/add', { conv: add, users: users }, '', function (d) {
+        var n = (d && d.added || []).length;
+        toast(n === 1 ? 'Added ' + whoName(d.added[0]) : 'Added ' + n + ' people');
+        room(add).needInfo = true; chatWake(100);
+        openChatInfo(add);
+      }).then(done);
+    } else if (users.length === 1) {
+      done(); chatStartDm(users[0]);
+    } else {
+      chatPost('/api/chat/group', { name: clip(fd.get('gname'), 40), users: users }, '', function (d) {
+        closeDialog(); chatOpen(d.conv); chatLoadList();
+      }).then(done);
+    }
+    return false;
+  }
+
+  /* ---------- Mauro: reported messages ---------- */
+  function openReports(fromSettings) {
+    curSheet = function () { openReports(fromSettings); };
+    openDialog({ title: 'Chat Reports', body: '<div class="sheet-loading" role="status"><span class="spinner" aria-hidden="true"></span><span class="sr">Loading</span></div>', back: fromSettings ? openSettings : null, backLabel: 'Settings' });
+    var mine = curSheet;
+    api('GET', '/api/admin/reports').then(function (r) {
+      if (curSheet !== mine) return;
+      if (r.status === 401) return sessionLost();
+      if (r.status !== 200 || !r.data || !Array.isArray(r.data.reports)) return sheetMessage('<p class="group-foot err">Couldn’t load the reports. Try again.</p>');
+      CHAT.reports = r.data.reports.length; paintBadge(); paintChatList();
+      sheetMessage(reportsHTML(r.data.reports));
+    }, function () { if (curSheet === mine) sheetMessage('<p class="group-foot err">' + esc(OFFLINE_MSG) + '</p>'); });
+  }
+  function reportsHTML(list) {
+    if (!list.length) return '<p class="group-foot">No reports. When someone reports a chat message, it shows up here.</p>';
+    return list.map(function (x, i) {
+      var s = x.sender || {}, nm = s.name || 'Deleted account';
+      var where = x.kind === 'channel' ? 'Suggestions' : x.kind === 'dm' ? 'a direct chat' : x.kind === 'group' ? (x.name ? '“' + x.name + '”' : 'a group') : 'a deleted chat';
+      var d = ' data-conv="' + esc(x.conv) + '" data-seq="' + esc(x.seq) + '"';
+      var by = (x.by || []).map(function (p) { return p.name || 'Deleted account'; });
+      return grp(
+        (s.name ? '<button type="button" class="row row-btn acct-row" data-act="admin-user" data-id="' + esc(s.id) + '">' : '<div class="row acct-row">') + avatar(s.id || '?', nm, '', s.avatar) +
+          '<span class="two-line"><b>' + esc(nm) + '</b><span>' + esc((s.free && s.name ? '@' + s.id + ' · ' : '') + 'in ' + where + ' · ' + ago(x.at)) + '</span></span>' + (s.name ? icon('chev') + '</button>' : '</div>') +
+        '<p class="row rep-body">' + esc(x.body || '') + '</p>' +
+        (x.gone ? '' : rButton('Delete Message', 'admin-report-del', d, 'danger')) +
+        rButton(x.gone ? 'Clear' : 'Keep Message', 'admin-report-ok', d, 'center'),
+        i === 0 ? 'Reported · ' + list.length : '',
+        'Reported by ' + esc(by.length < 2 ? by.join('') : by.slice(0, -1).join(', ') + ' and ' + by[by.length - 1]) + '.' +
+          (x.gone ? ' The message is already gone.' : '') + (s.off ? ' Chat is off for ' + esc(nm) + '.' : ''));
+    }).join('');
+  }
+  function adminReportAct(el, remove) {
+    if (remove && !arm(el, 'Press again to delete')) return;
+    el.disabled = true;
+    chatPost('/api/admin/report', { conv: el.dataset.conv, seq: Number(el.dataset.seq), remove: remove }, remove ? 'Message deleted' : 'Report cleared', function () {
+      var rm = CHAT.rooms[el.dataset.conv];
+      if (rm && remove) rm.msgs.forEach(function (m) { if (m.seq === Number(el.dataset.seq)) { m.del = 1; m.body = ''; } });
+      if (rm && remove && CHAT.open === el.dataset.conv) paintMsgs();
+      openReports(!!dlgBack);
+    }).then(function () { if (el.isConnected) el.disabled = false; });
+  }
+
+  /* =========================================================
+     Study pet: a puppy that grows with your study time.
+     pet.js draws and animates it; this part keeps its stats in the planner (S.pet).
+     Needs (0 to 100) are stored with the moment they were measured (at) and fall
+     with time. Growth comes from logged study sessions, so it syncs with them.
+     ========================================================= */
+  var PETE = window.MyIBPetEngine || null;
+  var PET_RATE = { food: 5, water: 100 / 14, fun: 100 / 24 };   /* points lost per hour: empty after 20 h, 14 h, 24 h */
+  var PET_DAY_CAP = 480;                                           /* study minutes a day that count */
+  var PET_NAMES = ['Biscuit', 'Luna', 'Coco', 'Milo', 'Nala', 'Toby', 'Mochi', 'Pepper', 'Oreo', 'Rosie', 'Bruno', 'Kiwi', 'Maple', 'Churro'];
+  var NEED_INFO = [['food', 'Food', '#FF9500'], ['water', 'Water', '#32ADE6'], ['fun', 'Fun', '#FF2D55']];
+  function petBreeds() { return PETE ? PETE.BREEDS : [{ id: 'golden', name: 'Golden Retriever', coats: [{ id: 'gold', name: 'Golden', base: '#EBA852' }] }]; }
+  function petBreed(id) { var l = petBreeds(); for (var i = 0; i < l.length; i++) if (l[i].id === id) return l[i]; return null; }
+  function petStages() { return PETE ? PETE.STAGES : [{ id: 'newborn', name: 'Newborn', hours: 0 }]; }
+  function petItems() { return PETE ? PETE.ITEMS : []; }
+  function petItem(id) { var l = petItems(); for (var i = 0; i < l.length; i++) if (l[i].id === id) return l[i]; return null; }
+  function cleanPet(p) {
+    if (!p || typeof p !== 'object' || !ID.test(p.id)) return null;
+    var born = Number(p.born);
+    if (!(born > 1.5e12 && born < 4e12)) return null;
+    var br = petBreed(p.breed) || petBreeds()[0];
+    var coat = br.coats.some(function (c) { return c.id === p.coat; }) ? p.coat : br.coats[0].id;
+    var w = p.wear && typeof p.wear === 'object' ? p.wear : {}, wear = {};
+    ['neck', 'head', 'face'].forEach(function (s) { var it = petItem(w[s]); wear[s] = it && it.slot === s ? it.id : null; });
+    function need(v) { v = Number(v); return isFinite(v) ? Math.max(0, Math.min(100, Math.round(v * 10) / 10)) : 70; }
+    var at = Number(p.at);
+    return {
+      id: p.id, name: str(p.name, 16).replace(/\s+/g, ' ').trim() || 'Buddy', breed: br.id, coat: coat,
+      born: born, bornDate: DATE.test(p.bornDate) ? p.bornDate : toISO(new Date(born)), wear: wear,
+      food: need(p.food), water: need(p.water), fun: need(p.fun), at: isFinite(at) && at > 1.5e12 && at < 4e12 ? at : born,
+      lost: Math.max(0, Math.round((Number(p.lost) || 0) * 100) / 100), used: Math.max(0, Math.round(Number(p.used) || 0)),
+      stage: Math.max(0, Math.min(petStages().length - 1, Math.round(Number(p.stage) || 0))),
+      skip: (Array.isArray(p.skip) ? p.skip : []).filter(function (x) { return typeof x === 'string' && ID.test(x); }).slice(-300)
+    };
+  }
+  /* both devices changed the pet: keep the most care (needs, as of the later of the two), the biggest penalty and treat use, and each side's look changes */
+  function mergePet(b, m, t) {
+    if (same(m, b)) return t;
+    if (same(t, b)) return m;
+    if (!m || !t || m.id !== t.id) return m;
+    var o = clone(m), tm = Math.max(m.at, t.at), nm = petNeeds(m, tm), nt = petNeeds(t, tm), bb = b && b.id === m.id ? b : null;
+    ['name', 'breed', 'coat'].forEach(function (k) { o[k] = pick3(bb ? bb[k] : undefined, m[k], t[k]); });
+    if (o.coat !== m.coat && o.breed !== t.breed) o.coat = m.coat;
+    o.wear = mergeMap(bb ? bb.wear : {}, m.wear, t.wear);
+    o.food = Math.max(nm.food, nt.food); o.water = Math.max(nm.water, nt.water); o.fun = Math.max(nm.fun, nt.fun); o.at = tm;
+    o.lost = Math.max(m.lost, t.lost); o.used = Math.max(m.used, t.used); o.stage = Math.max(m.stage, t.stage);
+    o.skip = m.skip.concat(t.skip.filter(function (x) { return m.skip.indexOf(x) < 0; })).slice(-300);
+    return o;
+  }
+
+  function petNeeds(p, t) {
+    var h = Math.max(0, ((t == null ? nowMs() : t) - p.at) / 3600000);
+    return { food: Math.max(0, p.food - PET_RATE.food * h), water: Math.max(0, p.water - PET_RATE.water * h), fun: Math.max(0, p.fun - PET_RATE.fun * h) };
+  }
+  function petMood(p, t) {
+    var n = petNeeds(p, t);
+    if (n.food <= 0 || n.water <= 0 || n.fun <= 0) return 'sad';
+    var low = Math.min(n.food, n.water, n.fun);
+    if (low < 25) return n.food === low ? 'hungry' : n.water === low ? 'thirsty' : 'bored';
+    return 'happy';
+  }
+  /* when the first need ran out, in ms */
+  function petZeroAt(p) { return p.at + Math.min(p.food / PET_RATE.food, p.water / PET_RATE.water, p.fun / PET_RATE.fun) * 3600000; }
+  /* study minutes since adoption, at most 8 hours a day. grow skips sessions logged while the puppy was sad. */
+  function petStudy(p) {
+    var day = {}, dayAll = {}, skip = new Set(p.skip), k;
+    S.sessions.forEach(function (x) {
+      if (x.date < p.bornDate) return;
+      dayAll[x.date] = (dayAll[x.date] || 0) + x.minutes;
+      if (!skip.has(x.id)) day[x.date] = (day[x.date] || 0) + x.minutes;
+    });
+    var grow = 0, all = 0;
+    for (k in day) grow += Math.min(PET_DAY_CAP, day[k]);
+    for (k in dayAll) all += Math.min(PET_DAY_CAP, dayAll[k]);
+    return { grow: grow, all: all };
+  }
+  function stageMin(i) { return (petStages()[i] || petStages()[0]).hours * 60; }
+  /* a neglected puppy loses a minute of growth for every 30 minutes, but never drops a stage */
+  function petPenalty(p, t, grow) {
+    var z = Math.max(p.at, petZeroAt(p));
+    if (z >= t) return 0;
+    return Math.min((t - z) / 1800000, Math.max(0, grow - p.lost - stageMin(p.stage)));
+  }
+  function petState(p) {
+    var t = nowMs(), st = petStudy(p), pen = petPenalty(p, t, st.grow), stages = petStages();
+    var xp = Math.max(stageMin(p.stage), st.grow - p.lost - pen), si = p.stage;
+    for (var i = 0; i < stages.length; i++) if (xp >= stages[i].hours * 60 && i > si) si = i;
+    return { t: t, needs: petNeeds(p, t), mood: petMood(p, t), xp: xp, stage: si, next: stages[si + 1] || null, all: st.all,
+      treats: Math.max(0, Math.floor(st.all / 20) - p.used), toTreat: 20 - st.all % 20, losing: pen > 0 };
+  }
+  /* write down the needs and any penalty as of now, before changing them */
+  function petSettle(p) {
+    var t = nowMs(), st = petStudy(p), pen = petPenalty(p, t, st.grow), n = petNeeds(p, t);
+    p.lost = Math.round((p.lost + pen) * 100) / 100;
+    p.food = Math.round(n.food * 10) / 10; p.water = Math.round(n.water * 10) / 10; p.fun = Math.round(n.fun * 10) / 10; p.at = t;
+  }
+  function petStageName(i) { return (petStages()[i] || petStages()[0]).name; }
+  function petLook(p) { return { breed: p.breed, coat: p.coat, stage: (petStages()[petState(p).stage] || petStages()[0]).id, wear: p.wear }; }
+  /* a study session was logged: a sad puppy doesn't grow from it (it still earns treats) */
+  function petOnSession(id) {
+    var p = S.pet;
+    if (!p) return;
+    if (petMood(p) === 'sad' && p.skip.indexOf(id) < 0) { p.skip.push(id); if (p.skip.length > 300) p.skip = p.skip.slice(-300); }
+    var s = petState(p);
+    if (s.stage > p.stage) { p.stage = s.stage; PETUI.levelUp = s.stage; }
+  }
+  function moodText(p, s) {
+    var nm = p.name;
+    if (s.mood === 'sad') {
+      var n = s.needs, what = n.food <= 0 ? 'hungry' : n.water <= 0 ? 'thirsty' : 'lonely';
+      return nm + ' is sad and ' + what + (s.losing ? ', and losing growth.' : '.');
+    }
+    if (s.mood === 'hungry') return nm + ' is hungry.';
+    if (s.mood === 'thirsty') return nm + ' is thirsty.';
+    if (s.mood === 'bored') return nm + ' wants to play.';
+    if (PETE && PETE.isNight(now().getHours())) return nm + ' is sleepy.';
+    return nm + ' is happy.';
+  }
+
+  /* ---------- the garden stays alive while other views redraw ---------- */
+  var PETUI = { ctl: null, stage: null, id: null, levelUp: null, playing: false, pend: 0, pendT: null, meterT: null, pick: null };
+  function petStop() {
+    if (PETUI.ctl) PETUI.ctl.destroy();
+    if (typeof PET_IMG === 'object') PET_IMG.key = '';
+    clearTimeout(PETUI.pendT); clearInterval(PETUI.meterT);
+    PETUI = { ctl: null, stage: null, id: null, levelUp: null, playing: false, pend: 0, pendT: null, meterT: null, pick: null };
+  }
+  function petKeep() { var st = PETUI.stage; if (st && st.parentNode) st.parentNode.removeChild(st); }
+  function petMounted() {
+    var slot = $('#pet-slot'), p = S.pet;
+    if (!slot || !p || !PETE) return;
+    if (PETUI.ctl && PETUI.id !== p.id) petStop();
+    var grew = petState(p).stage;
+    if (grew > p.stage) { p.stage = grew; PETUI.levelUp = grew; save(); }
+    if (!PETUI.stage) {
+      var st = document.createElement('div');
+      st.className = 'pet-stage'; st.tabIndex = 0; st.setAttribute('role', 'img');
+      slot.replaceWith(st);
+      PETUI.stage = st; PETUI.id = p.id;
+      var s0 = petState(p);
+      PETUI.ctl = PETE.mount(st, {
+        look: petLook(p), name: p.name, mood: s0.mood, needs: needsFrac(s0.needs), now: nowMs,
+        onPet: petPetted, onFetch: petFetched
+      });
+    } else {
+      slot.replaceWith(PETUI.stage);
+      PETUI.ctl.resume();
+    }
+    PETUI.stage.classList.toggle('playing', PETUI.playing);
+    petSync();
+    clearInterval(PETUI.meterT);
+    PETUI.meterT = setInterval(function () { if (UI.tab === 'pet' && S.pet && !document.hidden) { petSync(); petPaint(); } }, 20000);
+    if (PETUI.levelUp != null) {
+      var lv = PETUI.levelUp;
+      PETUI.levelUp = null;
+      setTimeout(function () { if (PETUI.ctl) PETUI.ctl.act('celebrate'); toast(p.name + ' grew into ' + (lv === 4 ? 'a Legend' : 'a ' + petStageName(lv)) + '!'); }, 450);
+    }
+  }
+  function needsFrac(n) { return { food: n.food / 100, water: n.water / 100, fun: n.fun / 100 }; }
+  function petSync() {
+    var p = S.pet;
+    if (!p || !PETUI.ctl) return;
+    var s = petState(p);
+    PETUI.ctl.setLook(petLook(p));
+    PETUI.ctl.setName(p.name);
+    PETUI.ctl.setMood(s.mood, needsFrac(s.needs));
+    if (PETUI.stage) PETUI.stage.setAttribute('aria-label', p.name + ', a ' + (petBreed(p.breed) || {}).name + ' ' + petStageName(s.stage).toLowerCase() + '. ' + moodText(p, s) + ' Press Enter to pet.');
+  }
+  /* meters and numbers, redrawn in place */
+  function petPaint() {
+    var p = S.pet;
+    if (!p || UI.tab !== 'pet') return;
+    var s = petState(p);
+    NEED_INFO.forEach(function (x) {
+      var v = x[0] === 'fun' ? Math.min(100, s.needs.fun + PETUI.pend) : s.needs[x[0]];
+      var m = $('#need-' + x[0]);
+      if (!m) return;
+      m.querySelector('.need-fill').style.width = Math.max(0, Math.min(100, v)).toFixed(1) + '%';
+      m.querySelector('.need-val').textContent = Math.round(v) + '%';
+      m.classList.toggle('low', v < 25);
+    });
+    var mt = $('#pet-mood'); if (mt) mt.textContent = moodText(p, s);
+    var tb = $('#pet-treats'); if (tb) tb.textContent = s.treats;
+  }
+  /* petting adds fun: a point every half second, saved once the rubbing stops */
+  function petPetted(sec) {
+    if (!S.pet) return;
+    PETUI.pend += sec * 2;
+    petPaint();
+    clearTimeout(PETUI.pendT);
+    PETUI.pendT = setTimeout(petCommit, 1500);
+  }
+  function petCommit() {
+    clearTimeout(PETUI.pendT); PETUI.pendT = null;
+    var p = S.pet, add = PETUI.pend;
+    PETUI.pend = 0;
+    if (!p || !add) return;
+    petSettle(p);
+    p.fun = Math.min(100, p.fun + add);
+    save(); petSync(); petPaint();
+  }
+  function petFetched() {
+    var p = S.pet;
+    if (!p) return;
+    petSettle(p);
+    p.fun = Math.min(100, p.fun + 25);
+    save(); petSync(); petPaint();
+  }
+  function petCare(kind) {
+    var p = S.pet;
+    if (!p || !PETUI.ctl) return;
+    var s = petState(p), nm = p.name;
+    if (kind === 'feed' || kind === 'water') {
+      var k = kind === 'feed' ? 'food' : 'water';
+      if (s.needs[k] >= 90) { toast(nm + (kind === 'feed' ? ' is full' : ' isn’t thirsty')); return; }
+      petSettle(p);
+      p[k] = Math.min(100, p[k] + (kind === 'feed' ? 45 : 60));
+    } else if (kind === 'treat') {
+      if (s.treats < 1) { toast('Study ' + s.toTreat + ' more minute' + (s.toTreat === 1 ? '' : 's') + ' to earn a treat'); return; }
+      petSettle(p);
+      p.used += 1; p.food = Math.min(100, p.food + 15); p.fun = Math.min(100, p.fun + 25);
+    }
+    save();
+    PETUI.ctl.act(kind);
+    petSync(); petPaint();
+  }
+  function petPlay() {
+    if (!S.pet || !PETUI.ctl) return;
+    PETUI.playing = !PETUI.playing;
+    PETUI.ctl.play(PETUI.playing);
+    if (PETUI.stage) PETUI.stage.classList.toggle('playing', PETUI.playing);
+    var b = $('[data-act="pet-play"]');
+    if (b) { b.setAttribute('aria-pressed', PETUI.playing); b.querySelector('span').textContent = PETUI.playing ? 'Stop' : 'Play'; }
+    var tb = $('[data-act="pet-throw"]'); if (tb) tb.hidden = !PETUI.playing;
+    if (PETUI.playing && ME && !sget('myib:pethint:' + ME.id)) {
+      sset('myib:pethint:' + ME.id, '1');
+      toast('Drag the ball and let go, or tap the grass to throw it');
+    }
+  }
+
+  /* ---------- the Pet view ---------- */
+  function petThumb(breed, coat, stage, pose, wear) {
+    return PETE ? PETE.svg({ breed: breed, coat: coat, stage: stage, pose: pose || 'sit', wear: wear || {}, frame: 118 }) : '';
+  }
+  function petAdoptHTML() {
+    return '<div class="page-head"><div><h1 class="display">Pet</h1><p class="sub">A puppy that grows while you study</p></div></div>' +
+      '<section class="card pet-adopt">' +
+        '<div class="pet-adopt-art" aria-hidden="true">' + petThumb('golden', 'gold', 'newborn', 'happy') + petThumb('shiba', 'red', 'newborn', 'sit') + petThumb('beagle', 'tri', 'newborn', 'sit') + '</div>' +
+        '<h2>Adopt a puppy</h2>' +
+        '<p>Your puppy grows with every minute you study. Feed it, give it water and play fetch, and it stays happy. Every 20 minutes of study earns a treat.</p>' +
+        '<button type="button" class="btn primary" data-act="pet-adopt">' + icon('pet') + 'Adopt a Puppy</button>' +
+      '</section>';
+  }
+  VIEWS.pet = function () {
+    if (!PETE) return '<div class="page-head"><div><h1 class="display">Pet</h1></div></div><section class="card"><p class="empty">Your pet couldn’t load. Reload MyIB to try again.</p></section>';
+    var p = S.pet;
+    if (!p) return petAdoptHTML();
+    var s = petState(p), br = petBreed(p.breed) || petBreeds()[0], st = timerState();
+    var needs = NEED_INFO.map(function (x) {
+      var v = x[0] === 'fun' ? Math.min(100, s.needs.fun + PETUI.pend) : s.needs[x[0]];
+      return '<div class="need' + (v < 25 ? ' low' : '') + '" id="need-' + x[0] + '" style="--c:' + x[2] + '">' +
+        '<span class="need-ic" aria-hidden="true">' + icon('n-' + x[0]) + '</span>' +
+        '<span class="need-main"><span class="need-top"><b>' + x[1] + '</b><span class="need-val">' + Math.round(v) + '%</span></span>' +
+        '<span class="need-bar" aria-hidden="true"><i class="need-fill" style="width:' + v.toFixed(1) + '%"></i></span></span></div>';
+    }).join('');
+    var nextTxt = s.next ? dur(Math.max(1, Math.ceil(s.next.hours * 60 - s.xp))) + ' of study to ' + s.next.name : 'Fully grown. A Legend!';
+    var from = stageMin(s.stage), pct = s.next ? Math.min(100, (s.xp - from) / (s.next.hours * 60 - from) * 100) : 100;
+    var nextItem = petItems().filter(function (it) { return (!it.plus || plusOn()) && it.hours * 60 > s.all; }).sort(function (a, b) { return a.hours - b.hours; })[0];
+    var focus = st ? '<p class="pet-timer"><span class="pet-dot" aria-hidden="true"></span>' + esc(p.name) + ' is studying with you · <b id="pet-timer">' + fmtClock(Math.ceil(st.remaining / 1000)) + '</b> left</p>' +
+        '<button type="button" class="btn quiet" data-act="tab" data-tab="today">' + icon('timer') + 'Open Focus</button>'
+      : '<button type="button" class="btn primary" data-act="pet-focus">' + icon('timer') + 'Study ' + UI.focusLen + ' Minutes</button>';
+    return '<div class="page-head pet-head"><div><h1 class="display">' + esc(p.name) + '</h1><p class="sub">' + esc(br.name) + ' · ' + esc(petStageName(s.stage)) + '</p></div>' +
+        '<div class="actions"><button type="button" class="btn" data-act="pet-wardrobe">' + icon('bow') + 'Wardrobe</button>' +
+        '<button type="button" class="icon-btn" data-act="pet-more" aria-label="' + esc(p.name) + ' settings" title="Pet settings">' + icon('more') + '</button></div></div>' +
+      '<div class="pet-layout"><section class="card pet-card" aria-label="' + esc(p.name) + '’s garden">' +
+        '<div id="pet-slot" class="pet-stage"></div>' +
+        '<p class="pet-mood" id="pet-mood" aria-live="polite">' + esc(moodText(p, s)) + '</p>' +
+        '<div class="pet-actions">' +
+          '<button type="button" class="pet-act" data-act="pet-feed" style="--c:#FF9500">' + icon('n-food') + '<span>Feed</span></button>' +
+          '<button type="button" class="pet-act" data-act="pet-water" style="--c:#32ADE6">' + icon('n-water') + '<span>Water</span></button>' +
+          '<button type="button" class="pet-act" data-act="pet-play" aria-pressed="' + PETUI.playing + '" style="--c:#34C759">' + icon('n-ball') + '<span>' + (PETUI.playing ? 'Stop' : 'Play') + '</span></button>' +
+          '<button type="button" class="pet-act" data-act="pet-treat" style="--c:#AF52DE">' + icon('n-bone') + '<span>Treat</span><b class="pet-count" id="pet-treats">' + s.treats + '</b></button>' +
+        '</div>' +
+        '<button type="button" class="btn quiet pet-throw" data-act="pet-throw"' + (PETUI.playing ? '' : ' hidden') + '>Throw the Ball</button>' +
+      '</section>' +
+      '<div class="pet-cols">' +
+        '<section class="card pet-needs" aria-labelledby="h-needs"><header class="card-head"><h2 id="h-needs">Needs</h2></header>' + needs +
+          '<p class="pet-note">Needs drop over the day. If one runs out, ' + esc(p.name) + ' gets sad, stops growing and slowly loses progress.</p></section>' +
+        '<section class="card pet-grow" aria-labelledby="h-grow"><header class="card-head"><h2 id="h-grow">Growing up</h2><span class="hint">' + esc(dur(s.all)) + ' studied</span></header>' +
+          '<div class="grow-stages" aria-hidden="true">' + petStages().map(function (x, i) { return '<span class="' + (i <= s.stage ? 'on' : '') + (i === s.stage ? ' cur' : '') + '">' + esc(x.name) + '</span>'; }).join('') + '</div>' +
+          '<div class="need-bar grow-bar" role="progressbar" aria-label="Growth to the next stage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(pct) + '"><i class="need-fill" style="width:' + pct.toFixed(1) + '%"></i></div>' +
+          '<p class="grow-next">' + esc(nextTxt) + '</p>' +
+          (nextItem ? '<p class="pet-note">Next in the wardrobe: ' + esc(nextItem.name) + ' at ' + nextItem.hours + ' hours. Every 20 minutes of study earns a treat' + (s.treats ? '' : ', the next one in ' + s.toTreat + ' min') + '.</p>'
+            : '<p class="pet-note">Every 20 minutes of study earns a treat' + (s.treats ? '' : ', the next one in ' + s.toTreat + ' min') + '.</p>') +
+          '<div class="pet-focus">' + focus + '</div>' +
+        '</section>' +
+      '</div></div>';
+  };
+  /* Today: a nudge when the puppy needs you */
+  function petNudge() {
+    var p = S.pet;
+    if (!p || !PETE) return '';
+    var s = petState(p);
+    var grew = PETUI.levelUp != null || s.stage > p.stage;
+    if (s.mood === 'happy' && !grew) return '';
+    var txt = grew && s.mood === 'happy' ? p.name + ' grew! Come and see.' : moodText(p, s);
+    return '<button type="button" class="pet-nudge' + (s.mood === 'sad' ? ' sad' : '') + '" data-act="tab" data-tab="pet">' +
+      '<span class="pet-nudge-art" aria-hidden="true">' + petThumb(p.breed, p.coat, petLook(p).stage, s.mood === 'sad' ? 'sad' : 'sit', p.wear) + '</span>' +
+      '<span class="two-line"><b>' + esc(txt) + '</b><span>Open ' + esc(p.name) + '’s garden</span></span>' + icon('chev') + '</button>';
+  }
+
+  /* ---------- sheets: adopt, change look, wardrobe, settings ---------- */
+  function breedAllowed(b) { return !b.plus || plusOn(); }
+  function breedShown(b) { return !b.plus || plusOn() || sellHere(); }
+  function openAdopt(change) {
+    var p = S.pet;
+    if (change && !p) return;
+    if (!PETUI.pick || PETUI.pick.change !== !!change) PETUI.pick = change ? { breed: p.breed, coat: p.coat, change: true } : { breed: 'golden', coat: 'gold', change: false, name: '' };
+    curSheet = function () { openAdopt(change); };
+    var pk = PETUI.pick, stageId = change ? petLook(p).stage : 'newborn';
+    var suggest = PET_NAMES[Math.floor(Math.random() * PET_NAMES.length)];
+    var breeds = petBreeds().filter(breedShown).map(function (b) {
+      var c0 = b.id === pk.breed ? pk.coat : b.coats[0].id;
+      return '<button type="button" class="pet-breed" data-act="pet-breed" data-id="' + b.id + '" aria-pressed="' + (b.id === pk.breed) + '">' +
+        '<span class="pb-art" aria-hidden="true">' + petThumb(b.id, c0, 'puppy', 'sit') + '</span><span class="pb-name">' + esc(b.name) + '</span>' +
+        (b.plus && !plusOn() ? '<span class="tag-plus">Plus</span>' : '') + '</button>';
+    }).join('');
+    var body =
+      '<div class="pet-preview" id="pet-preview">' + petThumb(pk.breed, pk.coat, stageId, 'happy', change ? p.wear : {}) + '</div>' +
+      '<p class="group-head">Breed</p><div class="pet-breeds" role="group" aria-label="Breed">' + breeds + '</div>' +
+      '<p class="group-head">Colour</p><div class="pet-coats" id="pet-coats" role="group" aria-label="Colour">' + coatButtons(pk) + '</div>' +
+      (change ? '' : grp(rField({ label: 'Name', name: 'name', id: 'pa-name', max: 16, value: pk.name || '', placeholder: 'Name, like ' + suggest }), 'Name', 'You can change the name later.'));
+    openDialog({
+      title: change ? 'Change Look' : 'Adopt a Puppy', body: body, submitLabel: change ? 'Save' : 'Adopt',
+      onSubmit: function (fd) {
+        var b = petBreed(pk.breed);
+        if (!b || !breedAllowed(b)) { openPlus(function () { openAdopt(change); }); return false; }
+        if (change) {
+          S.pet.breed = pk.breed; S.pet.coat = pk.coat; PETUI.pick = null;
+          save(); render(); toast('New look saved');
+          return;
+        }
+        var name = clip(fd.get('name'), 16) || suggest, t = nowMs();
+        petStop();
+        S.pet = cleanPet({ id: uid('pt'), name: name, breed: pk.breed, coat: pk.coat, born: t, bornDate: today(), wear: { neck: 'collar' }, food: 80, water: 80, fun: 80, at: t, lost: 0, used: 0, stage: 0, skip: [] });
+        PETUI.pick = null;
+        save(); go('pet');
+        toast('Say hi to ' + name + '!');
+      }
+    });
+  }
+  function coatButtons(pk) {
+    var b = petBreed(pk.breed) || petBreeds()[0];
+    return b.coats.map(function (c) {
+      var second = c.saddle || c.spot || c.tan || c.light || c.base;
+      return '<button type="button" class="pet-coat" data-act="pet-coat" data-id="' + c.id + '" aria-pressed="' + (c.id === pk.coat) + '">' +
+        '<i style="background:linear-gradient(135deg,' + c.base + ' 0 55%,' + second + ' 55% 100%)"></i>' + esc(c.name) + '</button>';
+    }).join('');
+  }
+  function adoptPick(kind, id) {
+    var pk = PETUI.pick;
+    if (!pk) return;
+    if (kind === 'breed') {
+      var b = petBreed(id);
+      if (!b) return;
+      if (!breedAllowed(b)) { var nf = $('#pa-name', dlg); if (nf) pk.name = nf.value; openPlus(function () { openAdopt(pk.change); }); return; }
+      pk.breed = id; pk.coat = b.coats[0].id;
+      $$('.pet-breed', dlg).forEach(function (x) { x.setAttribute('aria-pressed', x.dataset.id === id); });
+      $('#pet-coats', dlg).innerHTML = coatButtons(pk);
+    } else pk.coat = id;
+    $$('.pet-coat', dlg).forEach(function (x) { x.setAttribute('aria-pressed', x.dataset.id === pk.coat); });
+    var p = S.pet;
+    $('#pet-preview', dlg).innerHTML = petThumb(pk.breed, pk.coat, pk.change && p ? petLook(p).stage : 'newborn', 'happy', pk.change && p ? p.wear : {});
+  }
+  var SLOT_NAMES = [['neck', 'Neck'], ['head', 'Head'], ['face', 'Face']];
+  function openWardrobe() {
+    var p = S.pet;
+    if (!p || !PETE) return;
+    curSheet = openWardrobe;
+    var s = petState(p), look = petLook(p);
+    var groups = SLOT_NAMES.map(function (sl) {
+      var items = petItems().filter(function (it) { return it.slot === sl[0] && (!it.plus || plusOn() || sellHere()); });
+      return '<p class="group-head">' + sl[1] + '</p><div class="wear-grid">' + items.map(function (it) {
+        var on = p.wear[sl[0]] === it.id, needH = it.hours * 60 > s.all, needPlus = it.plus && !plusOn();
+        var sub = on ? 'Wearing' : needPlus ? 'Plus' : needH ? 'At ' + it.hours + ' h' : 'Tap to wear';
+        return '<button type="button" class="wear-item' + (needH || needPlus ? ' locked' : '') + '" data-act="pet-wear" data-id="' + it.id + '" aria-pressed="' + on + '">' +
+          '<span class="wi-art" aria-hidden="true">' + PETE.itemSVG(it.id) + '</span><b>' + esc(it.name) + '</b><span class="wi-sub">' + esc(sub) + '</span></button>';
+      }).join('') + '</div>';
+    }).join('');
+    openDialog({
+      title: 'Wardrobe',
+      body: '<div class="pet-preview" id="pet-preview">' + petThumb(p.breed, p.coat, look.stage, 'happy', p.wear) + '</div>' + groups +
+        '<p class="group-foot">You’ve studied ' + esc(dur(s.all)) + ' with ' + esc(p.name) + '. More study time unlocks more to wear.</p>'
+    });
+  }
+  function petWear(id) {
+    var p = S.pet, it = petItem(id);
+    if (!p || !it) return;
+    var s = petState(p);
+    if (it.plus && !plusOn()) { openPlus(openWardrobe); return; }
+    if (it.hours * 60 > s.all) { toast(it.name + ' unlocks after ' + it.hours + ' hours of study'); return; }
+    p.wear[it.slot] = p.wear[it.slot] === id ? null : id;
+    save();
+    petSync();
+    /* redraw the sheet in place, so it keeps its scroll position */
+    $$('.wear-item', dlg).forEach(function (b) {
+      var x = petItem(b.dataset.id);
+      if (!x) return;
+      var on = p.wear[x.slot] === x.id;
+      b.setAttribute('aria-pressed', on);
+      b.querySelector('.wi-sub').textContent = on ? 'Wearing' : x.plus && !plusOn() ? 'Plus' : x.hours * 60 > s.all ? 'At ' + x.hours + ' h' : 'Tap to wear';
+    });
+    var pv = $('#pet-preview', dlg);
+    if (pv) pv.innerHTML = petThumb(p.breed, p.coat, petLook(p).stage, 'happy', p.wear);
+  }
+  function openPetSettings() {
+    var p = S.pet;
+    if (!p) return;
+    curSheet = openPetSettings;
+    var s = petState(p);
+    var body =
+      grp(rField({ label: 'Name', name: 'name', id: 'ps-name', max: 16, value: p.name, placeholder: 'Name' }), 'Name') +
+      grp(rNav('palette', 'Change Look', 'pet-look', (petBreed(p.breed) || {}).name)) +
+      grp('<div class="row wrap pet-howto"><p><b>Growing up.</b> Every minute you log with the focus timer, or by hand, helps ' + esc(p.name) + ' grow, up to 8 hours a day. Newborn, then Puppy at 3 hours, Junior at 12, Adult at 30 and Legend at 80.</p>' +
+          '<p><b>Needs.</b> Food lasts about 20 hours, water about 14 and fun about a day. Petting and fetch add fun, and a treat helps both food and fun.</p>' +
+          '<p><b>Sad days.</b> When a need runs out, ' + esc(p.name) + ' stops growing and loses a little progress each hour, but never a whole stage.</p></div>', 'How it works') +
+      '<div class="group"><button type="button" class="row row-btn danger" data-act="pet-goodbye">Say Goodbye to ' + esc(p.name) + '</button></div>' +
+      '<p class="group-foot">' + esc(p.name) + ' goes away for good, with ' + esc(dur(s.all)) + ' of growth. A new puppy starts as a newborn.</p>';
+    openDialog({
+      title: 'Pet Settings', body: body, submitLabel: 'Save',
+      onSubmit: function (fd) {
+        var nm = clip(fd.get('name'), 16);
+        if (!nm) { fieldError('#ps-name', 'Give your puppy a name.'); return false; }
+        if (nm !== p.name) { p.name = nm; save(); render(); toast('Name saved'); }
+      }
+    });
+  }
+  var PET_ACT = {
+    'pet-adopt': function () { openAdopt(false); },
+    'pet-look': function () { openAdopt(true); },
+    'pet-breed': function (el) { adoptPick('breed', el.dataset.id); },
+    'pet-coat': function (el) { adoptPick('coat', el.dataset.id); },
+    'pet-feed': function () { petCare('feed'); },
+    'pet-water': function () { petCare('water'); },
+    'pet-treat': function () { petCare('treat'); },
+    'pet-play': function () { petPlay(); },
+    'pet-throw': function () { if (PETUI.ctl) PETUI.ctl.throwBall(); },
+    'pet-wardrobe': function () { openWardrobe(); },
+    'pet-wear': function (el) { petWear(el.dataset.id); },
+    'pet-more': function () { openPetSettings(); },
+    'pet-focus': function () {
+      if (S.timer) return;
+      ACT['focus-start']();
+      toast(S.pet ? S.pet.name + ' grows when the session ends' : 'Focus timer started');
+    },
+    'pet-goodbye': function (el) {
+      if (!arm(el, 'Press again to say goodbye')) return;
+      var nm = S.pet ? S.pet.name : '';
+      petStop(); S.pet = null;
+      closeDialog(); save(); render();
+      toast('You said goodbye to ' + nm);
+    }
+  };
+
   var ACT = {
     tab: function (el) { go(el.dataset.tab); },
     'theme-toggle': function () { S.settings.theme = effectiveDark() ? 'light' : 'dark'; sset('myib:theme', S.settings.theme); save(); render(); },
@@ -2765,10 +4530,10 @@
     'ics-export': function () { download('myib.ics', buildICS(), 'text/calendar;charset=utf-8'); toast('Calendar file downloaded'); },
     'reset-all': function (el) {
       if (!arm(el, isFree() ? 'Press again to empty your planner' : 'Press again to reset')) return;
-      var snap = snapshot(), keep = { theme: S.settings.theme, accent: S.settings.accent };
+      var snap = snapshot(), keep = { theme: S.settings.theme, accent: S.settings.accent, pet: S.pet };
       function apply(st) {
         S = sanitize(st);
-        S.settings.theme = keep.theme; S.settings.accent = keep.accent;
+        S.settings.theme = keep.theme; S.settings.accent = keep.accent; S.pet = keep.pet;
         if (isFree()) S.settings.guide = 'on';
         closeDialog(); save(); render(); toast(isFree() ? 'Your planner is empty again' : 'Starting data restored', snap);
       }
@@ -2848,6 +4613,24 @@
     },
     'legacy-hide': function () { markLegacy(ME.id); openSettings(); },
     'account-delete': function () { openDeleteAccount(); },
+    'pfp-open': function () { openPfp(); },
+    'pfp-pick': function () { var f = $('#pfp-file', dlg); if (f) f.click(); },
+    'pfp-remove': function (el) {
+      if (!arm(el, 'Press again to remove your photo')) return;
+      api('DELETE', '/api/avatar', null).then(function (r) {
+        if (r.status === 200) { ME.avatar = null; writeCache(); renderNav(); settingsTouched = true; openPfp(); toast('Photo removed'); }
+        else if (r.status === 401) sessionLost();
+        else toast('Couldn’t remove it (error ' + r.status + ')');
+      }, function () { toast('Can’t reach MyIB. Check your connection.'); });
+    },
+    'admin-pfp-remove': function (el) {
+      if (!arm(el, 'Press again to take the photo down')) return;
+      var id = el.dataset.id;
+      api('POST', '/api/admin/avatar', { user: id }).then(function (r) {
+        if (r.status === 200) { reloadAdmin(id); toast('Photo taken down'); }
+        else toast('Couldn’t remove it (error ' + r.status + ')');
+      }, function () { toast('Can’t reach MyIB. Check your connection.'); });
+    },
 
     /* setup guide */
     'guide-subjects': function () { openSubjectPicker(); },
@@ -2919,7 +4702,7 @@
         else toast('Couldn’t delete it (error ' + r.status + ')');
       }, function () { toast('Can’t reach MyIB. Check your connection.'); });
     },
-    'admin-user': function (el) { openAdminUser(el.dataset.id); },
+    'admin-user': function (el) { if (adminUser(el.dataset.id)) openAdminUser(el.dataset.id); else reloadAdmin(el.dataset.id); },
     'admin-export': function (el) {
       var id = el.dataset.id;
       api('GET', '/api/admin/export?user=' + encodeURIComponent(id)).then(function (r) {
@@ -2954,12 +4737,124 @@
         else toast('Couldn’t erase it (error ' + r.status + ')');
       }, function () { toast('Can’t reach MyIB. Check your connection.'); });
     },
+    'chat-open': function (el) { chatOpen(el.dataset.id); },
+    'chat-agree': function () { if (ME) { sset('myib:chatok:' + ME.id, '1'); render(); chatWake(60); } },
+    'chat-back': function () { chatBack(); },
+    'chat-new': function () { openChatNew({}); },
+    'chat-find': function () { chatFindRun(); },
+    'chat-info': function () { openChatInfo(CHAT.open); },
+    'chat-person': function (el) { openChatPerson(el.dataset.id); },
+    'chat-dm': function (el) { chatStartDm(el.dataset.id); },
+    'chat-msg': function (el) { openMsg(el); },
+    'chat-jump': function () { scrollRoom(); },
+    'chat-older': function () { chatOlder(); },
+    'chat-blocked': function () { openBlocked(); },
+    'chat-rename': function () { if (CHAT.open) openRename(CHAT.open); },
+    'chat-add': function () { if (CHAT.open) openChatNew({ add: CHAT.open }); },
+    'chat-reload': function () {
+      CHAT.listErr = false;
+      if (!CHAT.list) { paintChatList(); chatLoadList(); }
+      var rm = CHAT.open && room(CHAT.open);
+      if (rm && !rm.loaded) { rm.err = ''; paintMsgs(); roomLoad(CHAT.open); }
+    },
+    'chat-copy': function (el) { if (MSG_SEL) copyText(MSG_SEL.m.body, el, 'Copied'); },
+    'chat-unsend': function (el) {
+      var s = MSG_SEL;
+      if (!s || !s.m.seq || !arm(el, 'Press again to delete')) return;
+      chatPost('/api/chat/unsend', { conv: s.conv, seq: s.m.seq }, '', function () {
+        s.m.del = 1; s.m.body = '';
+        closeDialog();
+        if (CHAT.open === s.conv) paintMsgs();
+        syncList(s.conv);
+      });
+    },
+    'chat-report': function (el) {
+      var s = MSG_SEL;
+      if (!s || !s.m.seq || !arm(el, 'Press again to report')) return;
+      chatPost('/api/chat/report', { conv: s.conv, seq: s.m.seq }, 'Reported. Thanks for telling Mauro.', function () { closeDialog(); });
+    },
+    'chat-retry': function () {
+      var s = MSG_SEL;
+      if (!s) return;
+      closeDialog();
+      postMsg(s.conv, s.m, !!s.m.lost);
+      if (CHAT.open === s.conv) paintMsgs();
+    },
+    'chat-drop': function () {
+      var s = MSG_SEL, rm = s && CHAT.rooms[s.conv];
+      if (rm) rm.msgs = rm.msgs.filter(function (m) { return m !== s.m; });
+      closeDialog();
+      paintMsgs();
+    },
+    'chat-accept': function (el) {
+      var id = CHAT.open;
+      if (!id) return;
+      el.disabled = true;
+      chatPost('/api/chat/accept', { conv: id }, '', function () {
+        var rm = room(id), e = listEntry(id);
+        if (rm.info) rm.info.state = 'in';
+        if (e) e.state = 'in';
+        rm.needInfo = true;
+        paintRoomFoot(); paintRoomHead(); paintChatList();
+        chatWake(100);
+      }).then(function () { if (el.isConnected) el.disabled = false; });
+    },
+    'chat-decline': function (el) {
+      var id = CHAT.open;
+      if (!id || !arm(el, 'Press again to delete')) return;
+      chatPost('/api/chat/leave', { conv: id }, convOf(id).kind === 'dm' ? 'Request deleted' : 'Invite deleted', function () { roomGone(id); });
+    },
+    'chat-leave': function (el) {
+      var id = CHAT.open;
+      if (!id) return;
+      var c = convOf(id), del = c.kind === 'dm' || c.state === 'req';
+      if (!arm(el, del ? 'Press again to delete' : 'Press again to leave')) return;
+      chatPost('/api/chat/leave', { conv: id }, c.kind === 'dm' ? 'Chat deleted' : c.state === 'req' ? 'Invite deleted' : 'You left the group', function () { closeDialog(); roomGone(id); });
+    },
+    'chat-block': function (el) {
+      var id = el.dataset.id;
+      if (!id || !arm(el, 'Press again to block')) return;
+      chatPost('/api/chat/block', { user: id }, 'Blocked ' + whoName(id), function () {
+        if (!blockedId(id)) CHAT.blocked.push({ id: id, name: who(id).name, avatar: who(id).avatar, free: who(id).free });
+        closeDialog();
+        var dm = 'dm:' + (ME.id < id ? ME.id + ':' + id : id + ':' + ME.id);
+        if (CHAT.rooms[dm] || listEntry(dm)) roomGone(dm);
+        else if (CHAT.open) paintMsgs();
+        paintChatList();
+        chatLoadList();
+      });
+    },
+    'chat-unblock': function (el) {
+      var id = el.dataset.id;
+      if (!id) return;
+      chatPost('/api/chat/block', { user: id, on: false }, 'Unblocked ' + whoName(id), function () {
+        CHAT.blocked = CHAT.blocked.filter(function (p) { return p.id !== id; });
+        var rm = CHAT.rooms['dm:' + (ME.id < id ? ME.id + ':' + id : id + ':' + ME.id)];
+        if (rm && rm.info) rm.info.blocked = false;
+        if (curSheet === openBlocked && CHAT.blocked.length) openBlocked(); else closeDialog();
+        paintChatList();
+        if (CHAT.open) { paintRoomFoot(); paintMsgs(); }
+        chatLoadList();
+      });
+    },
+    'admin-reports': function () { openReports(dlg.open && curSheet === openSettings); },
+    'admin-report-del': function (el) { adminReportAct(el, true); },
+    'admin-report-ok': function (el) { adminReportAct(el, false); },
+    'admin-chat': function (el) {
+      var id = el.dataset.id, off = el.dataset.off === '1', u = adminUser(id);
+      if (off && !arm(el, 'Press again to turn off chat')) return;
+      el.disabled = true;
+      chatPost('/api/admin/chat', { user: id, off: off }, (off ? 'Chat off for ' : 'Chat on for ') + (u ? u.name : id), function () { reloadAdmin(id); })
+        .then(function () { if (el.isConnected) el.disabled = false; });
+    },
     undo: function () {
       if (!undoSnap) return;
       try { S = sanitize(JSON.parse(undoSnap)); } catch (e) { return; }
       undoSnap = null; save(); render(); toast('Undone');
     }
   };
+
+  Object.keys(PET_ACT).forEach(function (k) { ACT[k] = PET_ACT[k]; });
 
   document.addEventListener('click', function (e) {
     var el = e.target.closest ? e.target.closest('[data-act]') : null;
@@ -2987,6 +4882,16 @@
     else if (k === 'tasks-done') { UI.showDone = el.checked; saveUI(); render(); }
     else if (el.id === 'import-file') importFile(el);
     else if (el.id === 'admin-file') adminImportFile(el);
+    else if (el.id === 'pfp-file') pfpFile(el);
+    else if (el.name === 'u' && el.closest('.chat-pick')) pickChanged();
+    else if (el.id === 's-remind') {
+      var R = remindPrefs(), tr = $('.remind-time', dlg);
+      if (el.checked) { el.checked = R.on; remindTurnOn(); }
+      else { R.on = false; saveRemind(R); if (tr) tr.hidden = true; nativeSync(true); }
+    } else if (el.id === 's-rtime') {
+      var R2 = remindPrefs();
+      R2.time = el.value; saveRemind(R2); nativeSync(true);
+    }
   });
 
   document.addEventListener('input', function (e) {
@@ -3004,6 +4909,9 @@
       else if (el.id === 'au-name') AUTH.name = el.value;
     }
     if (el.id === 'adm-q') filterAdmin(el.value);
+    if (el.id === 'chat-input') { grow(el); if (CHAT.open) CHAT.drafts[CHAT.open] = el.value; CHAT.active = Date.now(); }
+    if (el.id === 'cn-q') filterPick(el.value);
+    if (el.id === 'crop-zoom') cropZoomTo(Number(el.value));
     if (el.id === 's-color') {
       var r = $('input[name="color"][value="custom"]', dlg);
       if (r) { r.checked = true; r.closest('.swatch').style.setProperty('--c', el.value); }
@@ -3017,6 +4925,7 @@
     if (f.dataset.form === 'auth') { authSubmit(f); return; }
     if (f.dataset.form === 'auth-other') { otherSubmit(f); return; }
     if (MODE !== 'app') return;
+    if (f.dataset.form === 'chat-send') { chatSubmit(); return; }
     var fd = new FormData(f), raw = clip(fd.get('title'), 200), parsed;
     if (f.dataset.form === 'quick-task') {
       if (!raw) { refocus('#quick-title'); return; }
@@ -3036,10 +4945,22 @@
   });
 
   document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (!t || e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+    if (t.id === 'chat-input' && !e.shiftKey && !coarse.matches) { e.preventDefault(); chatSubmit(); }
+    else if (t.id === 'cn-find') { e.preventDefault(); chatFindRun(); }
+  }, true);
+  document.addEventListener('visibilitychange', function () {
+    if (MODE !== 'app' || !ME) return;
+    if (document.hidden) { clearTimeout(CHAT.timer); CHAT.timer = null; }
+    else chatWake(UI.tab === 'chat' ? 200 : 1500);
+  });
+
+  document.addEventListener('keydown', function (e) {
     if (MODE !== 'app' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || dlg.open) return;
     var tg = e.target;
     if (tg && (tg.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName))) return;
-    var i = '12345'.indexOf(e.key);
+    var i = '123456'.indexOf(e.key);
     if (i >= 0 && e.key.length === 1) { e.preventDefault(); go(TABS[i][0]); return; }
     if (e.key === 'n' || e.key === 'N') { e.preventDefault(); openTask(null, {}); }
     else if (e.key === 'e' || e.key === 'E') { e.preventDefault(); openEvent(null, {}); }
@@ -3068,6 +4989,7 @@
   function tick() {
     if (MODE !== 'app') return;
     if (S.timer) updateTimerUI();
+    if (UI.tab === 'today' || UI.tab === 'timetable') moveFillBars();
     if (SYNC.needRender && idle()) { SYNC.needRender = false; render(); }
     var d = now(), m = d.getHours() * 60 + d.getMinutes(), day = toISO(d);
     if (day !== lastDay) {
@@ -3124,6 +5046,10 @@
     SYNC = freshSync();
     closeDialog(); hideToast();
     ME = null; CONF = blankConf();
+    clearTimeout(CHAT.timer); CHAT = freshChat();
+    petStop();
+    document.body.classList.remove('chat-conv', 'kb-open');
+    paintBadge();
     S = sanitize(clone(DEFAULTS));
     document.documentElement.removeAttribute('data-accent');
     document.title = 'MyIB';
@@ -3135,7 +5061,8 @@
     var h = location.hash.slice(1), t = today();
     /* a fresh log in starts on Today; a reload keeps the section in the address */
     if (fresh) { UI.tab = 'today'; try { history.replaceState(null, '', '#today'); } catch (e) { /* ignore */ } }
-    else UI.tab = TABS.some(function (x) { return x[0] === h; }) ? h : (UI.tab || 'today');
+    else if (h === 'chat' || h.indexOf('chat/') === 0) { UI.tab = 'chat'; CHAT.open = parseHash(h).conv; }
+    else UI.tab = TABS.some(function (x) { return x[0] === h; }) ? h : UI.tab && UI.tab !== 'chat' ? UI.tab : 'today';
     UI.calMonth = t.slice(0, 7); UI.calSel = t; UI.todayWhich = null;
     if (!subj(UI.focusSubject)) {
       var nx = S.events.filter(function (e) { return e.subject && (e.type === 'deadline' || e.type === 'exam') && !e.done && e.start >= t; }).sort(byStart)[0];
@@ -3147,6 +5074,17 @@
     $('#view').focus({ preventScroll: true });
     scheduleNag();
     welcomeIfNew();
+    chatWake(UI.tab === 'chat' ? 100 : 1500);
+    openFromLink();
+    remindAsk();
+  }
+  /* myib.app/?open=plus or ?open=support: the iPhone app sends people here to pay or support */
+  function openFromLink() {
+    var want = null;
+    try { want = new URLSearchParams(location.search).get('open'); } catch (e) { want = null; }
+    if (want !== 'plus' && want !== 'support') return;
+    try { history.replaceState(null, '', location.pathname + location.hash); } catch (e) { /* ignore */ }
+    setTimeout(function () { if (MODE === 'app' && ME && !dlg.open) (want === 'plus' ? openPlus : openSupport)(null); }, 700);
   }
   /* a brand-new empty planner opens with the welcome sheet, once */
   function welcomeIfNew() {
@@ -3219,7 +5157,7 @@
     return '<section class="auth-card" aria-labelledby="auth-h">' + brandHTML() +
         '<h1 class="auth-q" id="auth-h">Who’s using MyIB?</h1>' + body +
         '<button type="button" class="auth-alt" data-act="auth-other"><span class="two-line"><b>I’m not in Sociales 2 IB</b><span>Make your own free account</span></span>' + icon('chev') + '</button>' +
-        '<p class="auth-foot">Your planner is private. Only you can open it, with your own password.</p>' +
+        '<p class="auth-foot">Your planner is private. Only you can open it, with your own password. <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a></p>' +
       '</section>';
   }
 
@@ -3257,7 +5195,7 @@
         (join ? '<p class="auth-hint">Your username: 3 to 20 lowercase letters, numbers, dots or underscores. You log in with it on every device.</p>' : '') +
         '<p class="auth-err" id="au-err" role="alert"' + (AUTH.err ? '' : ' hidden') + '>' + esc(AUTH.err) + '</p>' +
         '<button type="submit" class="btn primary auth-go"' + (AUTH.busy ? ' disabled' : '') + '>' + (join ? 'Create Account' : reset ? 'Save New Password' : 'Log In') + '</button>' +
-        '<p class="auth-foot">' + (join ? 'Your planner is private. Only you can open it, with your own password.' : 'Forgot your password? Ask Mauro to reset it. Your planner stays safe.') + '</p>' +
+        '<p class="auth-foot">' + (join ? 'Your planner is private. Only you can open it, with your own password. <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>' : 'Forgot your password? Ask Mauro to reset it. Your planner stays safe.') + '</p>' +
       '</form>';
   }
   function otherSubmit(form) {
@@ -3299,6 +5237,7 @@
       }
       if (r.status === 400 && d.error === 'username') return authError('Pick a username with 3 to 20 lowercase letters, numbers, dots or underscores.', '#au-user');
       if (r.status === 400 && d.error === 'name') return authError('Enter your first name.', '#au-name');
+      if (r.status === 400 && d.error === 'words') return authError('MyIB doesn’t allow that name or username. Pick another one.', '#au-user');
       if (r.status === 400 && d.error === 'user') return authError('Check your username.', '#au-user');
       if (r.status === 400 && d.error === 'common') return authError('That password is too easy to guess. Try another.', '#au-pw', true);
       if (r.status === 400 && (d.error === 'weak' || d.error === 'long')) return authError(d.error === 'weak' ? 'Use at least 6 characters.' : 'That password is too long.', '#au-pw');
@@ -3458,6 +5397,7 @@
     var id = ME.id;
     sset('myib:bye', '1');
     api('POST', '/api/logout', {}).then(function (r) { if (r.status === 200) sdel('myib:bye'); }, function () {});
+    toNative({ type: 'logout' });
     stopApp();
     sdel(cacheKey(id)); sdel('myib:last');
     showAuth({});

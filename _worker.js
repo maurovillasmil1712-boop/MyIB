@@ -37,7 +37,8 @@ const SAVES_FREE = 300;        /* saves per 15 min for an account outside the cl
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_BODY = 700 * 1024;
 const MAX_STATE = 600 * 1024;
-const MAX_STATE_FREE = 300 * 1024;   /* 500 outside accounts × 300 KB stays far under the database limit */
+const MAX_STATE_FREE = 300 * 1024;
+const AVATAR_MAX = 120 * 1024;       /* a profile picture: a 320×320 JPEG the app makes, about 30 KB */   /* 500 outside accounts × 300 KB stays far under the database limit */
 
 /* SHA-256 of the class code and of Mauro's one-time setup code (trimmed, upper case). */
 const CLASS_CODE_SHA256 = '7a8cea1e9da1949fe886ce4221f7d306d4b82ea7d3a0998d52f1a9f36044fce8';
@@ -59,7 +60,7 @@ const BASE_HEADERS = {
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
   'X-Robots-Tag': 'noindex, nofollow'
 };
-const PAGE_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+const PAGE_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 class HttpError extends Error {
@@ -118,7 +119,28 @@ const ROUTES = {
   'PUT /api/admin/import': adminImport,
   'POST /api/admin/plus': adminPlus,
   'POST /api/admin/config': adminConfig,
-  'POST /api/admin/delete': adminDelete
+  'POST /api/admin/delete': adminDelete,
+  'PUT /api/avatar': putAvatar,
+  'DELETE /api/avatar': deleteAvatar,
+  'POST /api/admin/avatar': adminAvatar,
+  'GET /api/chat/people': chatPeople,
+  'GET /api/chat/find': chatFind,
+  'GET /api/chat/list': chatList,
+  'GET /api/chat/unread': chatUnread,
+  'GET /api/chat/msgs': chatMsgs,
+  'POST /api/chat/send': chatSend,
+  'POST /api/chat/dm': chatDm,
+  'POST /api/chat/group': chatGroup,
+  'POST /api/chat/add': chatAdd,
+  'POST /api/chat/rename': chatRename,
+  'POST /api/chat/leave': chatLeave,
+  'POST /api/chat/accept': chatAccept,
+  'POST /api/chat/block': chatBlock,
+  'POST /api/chat/unsend': chatUnsend,
+  'POST /api/chat/report': chatReport,
+  'GET /api/admin/reports': adminReports,
+  'POST /api/admin/report': adminReport,
+  'POST /api/admin/chat': adminChat
 };
 
 async function route(req, env, url) {
@@ -135,6 +157,7 @@ async function route(req, env, url) {
     secure: url.protocol === 'https:'
   };
   if (method === 'GET' && path.startsWith('/api/cal/')) return calendarFeed(c, path.slice(9), head);
+  if (method === 'GET' && path.startsWith('/api/avatar/')) return getAvatar(c, path.slice(12), head);
   if (method !== 'GET') {
     /* CSRF guard: the app always sends this header, and another site can't add it
        without a CORS preflight, which this server never approves. */
@@ -160,7 +183,18 @@ async function makeSchema(db) {
       db.prepare('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, reauth_until INTEGER)'),
       db.prepare('CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user)'),
       db.prepare('CREATE TABLE IF NOT EXISTS attempts (key TEXT PRIMARY KEY, count INTEGER NOT NULL, since INTEGER NOT NULL)'),
-      db.prepare('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)')
+      db.prepare('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)'),
+      db.prepare('CREATE TABLE IF NOT EXISTS avatars (user TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)'),
+      /* chat */
+      db.prepare('CREATE TABLE IF NOT EXISTS convs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT, created_by TEXT, created_at INTEGER NOT NULL, last_at INTEGER NOT NULL, last_seq INTEGER NOT NULL DEFAULT 0)'),
+      db.prepare('CREATE TABLE IF NOT EXISTS members (conv TEXT NOT NULL, user TEXT NOT NULL, state TEXT NOT NULL, read_seq INTEGER NOT NULL DEFAULT 0, from_seq INTEGER NOT NULL DEFAULT 0, joined_at INTEGER NOT NULL, added_by TEXT, PRIMARY KEY (conv, user)) WITHOUT ROWID'),
+      db.prepare('CREATE INDEX IF NOT EXISTS members_user ON members (user, state)'),
+      db.prepare('CREATE TABLE IF NOT EXISTS messages (conv TEXT NOT NULL, seq INTEGER NOT NULL, user TEXT, body TEXT NOT NULL, at INTEGER NOT NULL, sys INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER, PRIMARY KEY (conv, seq)) WITHOUT ROWID'),
+      db.prepare('CREATE INDEX IF NOT EXISTS messages_deleted ON messages (conv, deleted_at) WHERE deleted_at IS NOT NULL'),
+      db.prepare('CREATE TABLE IF NOT EXISTS blocks (user TEXT NOT NULL, blocked TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (user, blocked)) WITHOUT ROWID'),
+      db.prepare('CREATE TABLE IF NOT EXISTS chat_bans (user TEXT PRIMARY KEY, at INTEGER NOT NULL)'),
+      db.prepare('CREATE TABLE IF NOT EXISTS reports (conv TEXT NOT NULL, seq INTEGER NOT NULL, reporter TEXT NOT NULL, sender TEXT, body TEXT, at INTEGER NOT NULL, PRIMARY KEY (conv, seq, reporter))'),
+      db.prepare("INSERT OR IGNORE INTO convs (id, kind, name, created_by, created_at, last_at, last_seq) VALUES ('suggestions', 'channel', 'Suggestions', 'mauro', 0, 0, 0)")
   ]);
   /* databases made by an older MyIB lack the newer columns: add them */
   let have = null;
@@ -376,10 +410,11 @@ async function needAdmin(c) {
 }
 async function payload(c, acct, plusCol, cal) {
   const id = acct.id, plus = plusOf(id, plusCol);
+  const [conf, av] = await Promise.all([readConf(c), c.db.prepare('SELECT updated_at FROM avatars WHERE user = ?').bind(id).first()]);
   return Object.assign({
-    user: { id, name: acct.name, kind: acct.kind, admin: id === ADMIN, plus },
+    user: { id, name: acct.name, kind: acct.kind, admin: id === ADMIN, plus, avatar: av ? av.updated_at : null },
     cal: plus && cal ? cal : null
-  }, await readConf(c));
+  }, conf);
 }
 
 /* =========================================================
@@ -523,6 +558,7 @@ async function join(c) {
   if (!isFreeId(id)) throw new HttpError(409, 'taken');
   const name = cleanName(b.name);
   if (!name) throw new HttpError(400, 'name');
+  if (rudeText(name) || rudeText(id)) throw new HttpError(400, 'words');
   const pw = newPassword(b.password, id);
   await hit(c, 'join:' + c.ip, JOINS_PER_HOUR, 60 * MIN, 'slow');
   const q = await c.db.batch([
@@ -543,7 +579,11 @@ async function join(c) {
       'count = CASE WHEN attempts.since <= ?3 THEN 1 ELSE attempts.count + 1 END, since = CASE WHEN attempts.since <= ?3 THEN ?2 ELSE attempts.since END')
       .bind('joins:day', c.now, c.now - DAY),
     c.db.prepare('DELETE FROM planners WHERE user = ?1').bind(id),
-    c.db.prepare('DELETE FROM sessions WHERE user = ?1').bind(id)
+    c.db.prepare('DELETE FROM sessions WHERE user = ?1').bind(id),
+    c.db.prepare('DELETE FROM members WHERE user = ?1').bind(id),
+    c.db.prepare('DELETE FROM blocks WHERE user = ?1 OR blocked = ?1').bind(id),
+    c.db.prepare('DELETE FROM chat_bans WHERE user = ?1').bind(id),
+    c.db.prepare('DELETE FROM reports WHERE sender = ?1 OR reporter = ?1').bind(id)
   ]);
   return startSession(c, { id, name, kind: 'free' });
 }
@@ -715,21 +755,48 @@ async function unlock(c) {
   return json(await payload(c, sessionAccount(s), plus, s.cal));
 }
 
-/* Someone outside the class can delete their own account (after /api/reauth). */
+/* Anyone can delete their own account (after /api/reauth), except Mauro's admin account. */
 async function deleteAccount(c) {
   const s = await needUser(c);
-  if (s.kind !== 'free') throw new HttpError(403, 'class');
+  if (s.user === ADMIN) throw new HttpError(403, 'admin');
   if (!(s.reauth > c.now)) throw new HttpError(403, 'reauth');
-  await removeFree(c, s.user);
+  await (s.kind === 'free' ? removeFree(c, s.user) : removeClass(c, s.user));
   return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(c, '', 0) });
 }
 function removeFree(c, id) {
   return c.db.batch([
-    c.db.prepare('DELETE FROM planners WHERE user = ?1').bind(id),
-    c.db.prepare('DELETE FROM sessions WHERE user = ?1').bind(id),
     c.db.prepare("DELETE FROM users WHERE id = ?1 AND kind = 'free'").bind(id),
-    c.db.prepare('DELETE FROM attempts WHERE key IN (?1, ?2) OR substr(key, 1, ?3) = ?4').bind('name:' + id, 'code:' + id, ('login:' + id + ':').length, 'login:' + id + ':')
+    ...accountWipe(c, id)
   ]);
+}
+/* A class member deletes their account: the name goes back on the class list, locked.
+   Nobody knows the new code, so Mauro makes a setup code before anyone can use the name again. */
+async function removeClass(c, id) {
+  const lock = await sha256hex(randomToken(24));
+  return c.db.batch([
+    c.db.prepare('UPDATE users SET pw = NULL, reset = ?2, plus = NULL, cal_token = NULL, last_login = NULL WHERE id = ?1').bind(id, lock),
+    ...accountWipe(c, id),
+    c.db.prepare('DELETE FROM reports WHERE sender = ?1').bind(id)
+  ]);
+}
+/* everything an account leaves behind: planner, photo, logins, and its chats */
+function accountWipe(c, id) {
+  const dms = "SELECT conv FROM members WHERE user = ?1 AND substr(conv, 1, 3) = 'dm:'";
+  return [
+    c.db.prepare('DELETE FROM planners WHERE user = ?1').bind(id),
+    c.db.prepare('DELETE FROM avatars WHERE user = ?1').bind(id),
+    c.db.prepare('DELETE FROM sessions WHERE user = ?1').bind(id),
+    c.db.prepare('DELETE FROM attempts WHERE key IN (?1, ?2) OR substr(key, 1, ?3) = ?4').bind('name:' + id, 'code:' + id, ('login:' + id + ':').length, 'login:' + id + ':'),
+    /* chat: their direct chats go for both people; in groups their messages show as deleted */
+    c.db.prepare('DELETE FROM messages WHERE conv IN (' + dms + ')').bind(id),
+    c.db.prepare('DELETE FROM convs WHERE id IN (' + dms + ')').bind(id),
+    c.db.prepare('DELETE FROM members WHERE conv IN (' + dms + ')').bind(id),
+    c.db.prepare("UPDATE messages SET body = '', deleted_at = ?2 WHERE user = ?1 AND sys = 0 AND deleted_at IS NULL").bind(id, c.now),
+    c.db.prepare('DELETE FROM members WHERE user = ?1').bind(id),
+    c.db.prepare('DELETE FROM blocks WHERE user = ?1 OR blocked = ?1').bind(id),
+    c.db.prepare('DELETE FROM chat_bans WHERE user = ?1').bind(id),
+    c.db.prepare('DELETE FROM reports WHERE reporter = ?1').bind(id)
+  ];
 }
 
 async function newCalendarLink(c) {
@@ -815,17 +882,21 @@ async function adminUsers(c) {
   await needAdmin(c);
   const res = await c.db.batch([
     c.db.prepare('SELECT id, name, kind, pw IS NOT NULL AS claimed, reset IS NOT NULL AS locked, created_at, last_login, plus FROM users'),
-    c.db.prepare('SELECT user, rev, updated_at, length(data) AS size FROM planners')
+    c.db.prepare('SELECT user, rev, updated_at, length(data) AS size FROM planners'),
+    c.db.prepare('SELECT user, updated_at FROM avatars'),
+    c.db.prepare('SELECT user FROM chat_bans')
   ]);
   const rows = res[0].results || [];
   const U = new Map(rows.map((r) => [r.id, r]));
   const P = new Map((res[1].results || []).map((r) => [r.user, r]));
+  const A = new Map((res[2].results || []).map((r) => [r.user, r.updated_at]));
+  const B = new Set((res[3].results || []).map((r) => r.user));
   function info(id, name, kind) {
     const a = U.get(id) || {}, p = P.get(id) || {};
     return {
       id, name, kind, admin: id === ADMIN, claimed: !!a.claimed, reset: !a.claimed && !!a.locked,
       created_at: a.created_at || null, last_login: a.last_login || null, plus: plusOf(id, a.plus),
-      rev: p.rev || 0, updated_at: p.updated_at || null, size: p.size || 0
+      rev: p.rev || 0, updated_at: p.updated_at || null, size: p.size || 0, avatar: A.get(id) || null, chat_off: B.has(id)
     };
   }
   const others = rows.filter((r) => r.kind === 'free' && isFreeId(r.id))
@@ -932,4 +1003,587 @@ async function adminDelete(c) {
   if (acct.kind !== 'free') throw new HttpError(400, 'class');
   await removeFree(c, acct.id);
   return json({ ok: true });
+}
+
+/* =========================================================
+   Profile pictures: only people logged in to MyIB can see them
+   ========================================================= */
+function unb64(s) {
+  const bin = atob(s), out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function getAvatar(c, rest, head) {
+  await needUser(c);
+  let id = '';
+  try { id = userId(decodeURIComponent(rest)); } catch (e) { id = ''; }
+  if (!(NAMES.has(id) || FREE_ID.test(id))) throw new HttpError(404, 'not_found');
+  const row = await c.db.prepare('SELECT data FROM avatars WHERE user = ?').bind(id).first();
+  if (!row) throw new HttpError(404, 'not_found');
+  return send(head ? null : unb64(row.data), 200, {
+    'Content-Type': 'image/jpeg',
+    /* the app asks for ?v=<time of the upload>, so a new photo gets a new address */
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    'Content-Disposition': 'inline; filename="avatar.jpg"'
+  });
+}
+/* the app crops and shrinks the photo itself and sends a small JPEG */
+async function putAvatar(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const m = typeof b.image === 'string' ? /^data:image\/jpeg;base64,([A-Za-z0-9+/]+={0,2})$/.exec(b.image) : null;
+  if (!m) throw new HttpError(400, 'image');
+  let bytes;
+  try { bytes = unb64(m[1]); } catch (e) { throw new HttpError(400, 'image'); }
+  if (bytes.length > AVATAR_MAX) throw new HttpError(413, 'too_big');
+  if (bytes.length < 125 || bytes[0] !== 0xFF || bytes[1] !== 0xD8 || bytes[2] !== 0xFF) throw new HttpError(400, 'image');
+  await hit(c, 'avatar:' + s.user, 30, 60 * MIN, 'slow');
+  await c.db.prepare(
+    'INSERT INTO avatars (user, data, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(user) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at'
+  ).bind(s.user, m[1], c.now).run();
+  return json({ avatar: c.now });
+}
+async function deleteAvatar(c) {
+  const s = await needUser(c);
+  await c.db.prepare('DELETE FROM avatars WHERE user = ?').bind(s.user).run();
+  return json({ avatar: null });
+}
+/* Mauro can take down anyone's photo */
+async function adminAvatar(c) {
+  await needAdmin(c);
+  const b = await readBody(c);
+  const { id } = await needAccount(c, b.user);
+  await c.db.prepare('DELETE FROM avatars WHERE user = ?').bind(id).run();
+  return json({ ok: true });
+}
+
+/* =========================================================
+   Chat: direct messages, groups and the Suggestions channel.
+   No sockets on the free plan: the app asks for new messages every few seconds while a
+   chat is open, and far less often everywhere else. Messages are plain text.
+   Classmates reach each other directly; anyone else starts as a request to accept.
+   ========================================================= */
+const CHANNEL = 'suggestions';
+const GROUP_MAX = 50;               /* people in one group, you included */
+const MSG_MAX = 2000;               /* characters in one message */
+const PAGE = 50;                    /* messages per page when a chat opens or scrolls back */
+const MSGS_PER_WINDOW = 150;        /* messages per person per 15 min */
+const SUGGESTIONS_PER_HOUR = 10;
+const CONV_ID = /^(dm:[a-z0-9_.]{1,20}:[a-z0-9_.]{1,20}|g:[A-Za-z0-9_-]{12}|suggestions)$/;
+
+/* Words MyIB doesn't allow in chat, group names, names or usernames (App Store rule 1.2).
+   Matching ignores case, accents, stretched letters and numbers standing in for letters. */
+const BLOCKED_WORDS = [
+  'nigger', 'niggers', 'nigga', 'niggas', 'negrata', 'negratas', 'faggot', 'faggots', 'fag', 'fags', 'tranny', 'trannies',
+  'maricon', 'maricones', 'marica', 'maricas', 'bollera', 'bolleras', 'chink', 'chinks', 'spic', 'spics', 'kike', 'kikes',
+  'wetback', 'wetbacks', 'sudaca', 'sudacas', 'retard', 'retards', 'retarded', 'subnormal', 'subnormales',
+  'mongolo', 'mongola', 'mongolos', 'mongolas', 'slut', 'sluts', 'whore', 'whores', 'puta', 'putas', 'zorra', 'zorras',
+  'kill yourself', 'kill urself', 'kys', 'suicidate', 'matate', 'tirate por un puente', 'tirate de un puente',
+  'ojala te mueras', 'ojala te murieras'
+];
+const LEET = { '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's' };
+function squash(v) {
+  return String(v).normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase().replace(/[013457@$]/g, (ch) => LEET[ch])
+    .replace(/([a-z])\1{2,}/g, '$1$1').split(/[^a-z]+/).filter(Boolean).join(' ');
+}
+const BLOCKED = BLOCKED_WORDS.map(squash);
+function rudeText(v) {
+  const t = ' ' + squash(v) + ' ';
+  return BLOCKED.some((w) => t.includes(' ' + w + ' '));
+}
+
+function convId(v) {
+  if (typeof v !== 'string' || !CONV_ID.test(v)) throw new HttpError(400, 'conv');
+  return v;
+}
+function dmId(a, b) { return 'dm:' + (a < b ? a + ':' + b : b + ':' + a); }
+function dmPartner(conv, me) { const p = conv.split(':'); return p[1] === me ? p[2] : p[1]; }
+/* classmates skip the request step */
+function trusted(a, b) { return NAMES.has(a) && NAMES.has(b); }
+function nameOf(id, stored) { return NAMES.get(id) || stored || null; }
+function seqParam(v) {
+  if (v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0) throw new HttpError(400, 'seq');
+  return n;
+}
+function seqOf(v) {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) throw new HttpError(400, 'seq');
+  return n;
+}
+function sysBody(o) { return JSON.stringify(o); }
+
+/* your place in a chat. Everyone reads the Suggestions channel. */
+async function membership(c, s, conv) {
+  const row = await c.db.prepare(
+    'SELECT c.kind, c.name, c.created_by, c.last_seq, m.state, m.read_seq, m.from_seq, ' +
+    '(SELECT 1 FROM chat_bans WHERE user = ?2) AS banned ' +
+    'FROM convs c LEFT JOIN members m ON m.conv = c.id AND m.user = ?2 WHERE c.id = ?1'
+  ).bind(conv, s.user).first();
+  if (!row) throw new HttpError(404, 'conv');
+  if (row.kind === 'channel') {
+    if (!row.state) { row.state = 'in'; row.read_seq = 0; row.from_seq = 0; row.fresh = true; }
+  } else if (row.state !== 'in' && row.state !== 'req') {
+    throw new HttpError(404, 'conv');
+  }
+  return row;
+}
+
+/* the next message in a chat (or a note like "Ana added Luca"), numbered in order */
+function messageStmts(c, conv, user, body, sys) {
+  return [
+    c.db.prepare('UPDATE convs SET last_seq = last_seq + 1, last_at = ?2 WHERE id = ?1').bind(conv, c.now),
+    c.db.prepare('INSERT INTO messages (conv, seq, user, body, at, sys) VALUES (?1, (SELECT last_seq FROM convs WHERE id = ?1), ?2, ?3, ?4, ?5) RETURNING seq')
+      .bind(conv, user, body, c.now, sys ? 1 : 0),
+    c.db.prepare('UPDATE members SET read_seq = (SELECT last_seq FROM convs WHERE id = ?1) WHERE conv = ?1 AND user = ?2').bind(conv, user)
+  ];
+}
+/* a chat nobody is in any more goes (a direct chat stays while a request waits in it) */
+function cleanupStmts(c, conv, dm) {
+  return [
+    c.db.prepare("DELETE FROM convs WHERE id = ?1 AND kind <> 'channel' AND NOT EXISTS (SELECT 1 FROM members WHERE conv = ?1 AND (state = 'in' OR (state = 'req' AND ?2)))").bind(conv, dm ? 1 : 0),
+    c.db.prepare('DELETE FROM messages WHERE conv = ?1 AND NOT EXISTS (SELECT 1 FROM convs WHERE id = ?1)').bind(conv),
+    c.db.prepare('DELETE FROM members WHERE conv = ?1 AND NOT EXISTS (SELECT 1 FROM convs WHERE id = ?1)').bind(conv)
+  ];
+}
+function leaveStmt(c, conv, user) {
+  return c.db.prepare(
+    "UPDATE members SET state = 'left', from_seq = (SELECT last_seq FROM convs WHERE id = ?1), read_seq = (SELECT last_seq FROM convs WHERE id = ?1) WHERE conv = ?1 AND user = ?2"
+  ).bind(conv, user);
+}
+async function blockedPair(c, a, b) {
+  return !!(await c.db.prepare('SELECT 1 AS x FROM blocks WHERE (user = ?1 AND blocked = ?2) OR (user = ?2 AND blocked = ?1) LIMIT 1').bind(a, b).first());
+}
+function notBanned(m) { if (m.banned) throw new HttpError(403, 'chat_off'); }
+async function needChat(c, s) {
+  if (await c.db.prepare('SELECT 1 AS x FROM chat_bans WHERE user = ?1').bind(s.user).first()) throw new HttpError(403, 'chat_off');
+}
+/* people you can add: set-up accounts, not you, no block either way */
+async function chatTargets(c, s, list, max) {
+  if (!Array.isArray(list) || !list.length || list.length > max) throw new HttpError(400, 'users');
+  const ids = [...new Set(list.map(userId))].filter((id) => id !== s.user && (NAMES.has(id) || isFreeId(id)));
+  if (!ids.length) return [];
+  const j = JSON.stringify(ids);
+  const res = await c.db.batch([
+    c.db.prepare('SELECT id, kind FROM users WHERE pw IS NOT NULL AND id IN (SELECT value FROM json_each(?1))').bind(j),
+    c.db.prepare('SELECT user, blocked FROM blocks WHERE (user = ?1 AND blocked IN (SELECT value FROM json_each(?2))) OR (blocked = ?1 AND user IN (SELECT value FROM json_each(?2)))').bind(s.user, j)
+  ]);
+  const ok = new Set((res[0].results || []).filter((r) => NAMES.has(r.id) || (r.kind === 'free' && isFreeId(r.id))).map((r) => r.id));
+  const off = new Set((res[1].results || []).map((r) => (r.user === s.user ? r.blocked : r.user)));
+  return ids.filter((id) => ok.has(id) && !off.has(id));
+}
+/* name null: the account is gone */
+function person(r) { return { id: r.id, name: nameOf(r.id, r.name), avatar: r.avatar || null, free: !NAMES.has(r.id) }; }
+
+/* your classmates with an account; people outside the class are found by exact username */
+async function chatPeople(c) {
+  const s = await needUser(c);
+  const ids = USERS.map((u) => u[0]).filter((id) => id !== s.user);
+  const { results } = await c.db.prepare(
+    'SELECT u.id, a.updated_at AS avatar FROM users u LEFT JOIN avatars a ON a.user = u.id WHERE u.pw IS NOT NULL AND u.id IN (SELECT value FROM json_each(?1))'
+  ).bind(JSON.stringify(ids)).all();
+  const av = new Map((results || []).map((r) => [r.id, r.avatar]));
+  return json({
+    dev: ADMIN,
+    people: ids.filter((id) => av.has(id)).map((id) => ({ id, name: NAMES.get(id), avatar: av.get(id) || null, free: false }))
+  });
+}
+async function chatFind(c) {
+  const s = await needUser(c);
+  const id = userId(c.url.searchParams.get('u')).replace(/^@/, '');
+  if (!(NAMES.has(id) || FREE_ID.test(id))) return json({ person: null });
+  await hit(c, 'find:' + s.user, 60, 60 * MIN, 'slow');
+  const r = await c.db.prepare(
+    'SELECT u.id, u.name, u.kind, a.updated_at AS avatar FROM users u LEFT JOIN avatars a ON a.user = u.id WHERE u.id = ?1 AND u.pw IS NOT NULL'
+  ).bind(id).first();
+  if (!r || id === s.user || !(NAMES.has(id) || (r.kind === 'free' && isFreeId(id)))) return json({ person: null });
+  return json({ person: person(r) });
+}
+
+async function chatList(c) {
+  const s = await needUser(c);
+  const me = s.user, admin = me === ADMIN;
+  const q = [
+    /* everyone is in Suggestions; joining starts with everything read */
+    c.db.prepare("INSERT OR IGNORE INTO members (conv, user, state, read_seq, from_seq, joined_at) SELECT id, ?1, 'in', last_seq, 0, ?2 FROM convs WHERE id = ?3").bind(me, c.now, CHANNEL),
+    /* a direct chat with no messages yet shows only for the person who opened it */
+    c.db.prepare(
+      "SELECT c.id, c.kind, c.name, c.created_by, c.last_seq, c.last_at, m.state, m.read_seq, m.from_seq FROM members m JOIN convs c ON c.id = m.conv " +
+      "WHERE m.user = ?1 AND m.state IN ('in', 'req') AND (c.kind <> 'dm' OR c.last_seq > m.from_seq OR c.created_by = ?1)"
+    ).bind(me),
+    c.db.prepare(
+      "SELECT g.conv, g.seq, g.user, g.body, g.sys, g.deleted_at, u.name FROM members m JOIN convs c ON c.id = m.conv JOIN messages g ON g.conv = c.id AND g.seq = c.last_seq " +
+      "LEFT JOIN users u ON u.id = g.user WHERE m.user = ?1 AND m.state IN ('in', 'req') AND c.last_seq > m.from_seq"
+    ).bind(me),
+    c.db.prepare(
+      'SELECT o.conv, o.user AS id, o.state, u.name, u.kind, a.updated_at AS avatar FROM members m JOIN members o ON o.conv = m.conv AND o.user <> m.user ' +
+      "LEFT JOIN users u ON u.id = o.user LEFT JOIN avatars a ON a.user = o.user WHERE m.user = ?1 AND m.state IN ('in', 'req') AND m.conv <> ?2"
+    ).bind(me, CHANNEL),
+    c.db.prepare('SELECT b.blocked AS id, u.name, u.kind, a.updated_at AS avatar FROM blocks b LEFT JOIN users u ON u.id = b.blocked LEFT JOIN avatars a ON a.user = b.blocked WHERE b.user = ?1').bind(me),
+    c.db.prepare('SELECT 1 AS x FROM chat_bans WHERE user = ?1').bind(me)
+  ];
+  if (admin) q.push(c.db.prepare('SELECT COUNT(*) AS n FROM (SELECT DISTINCT conv, seq FROM reports)'));
+  const res = await c.db.batch(q);
+  const last = new Map((res[2].results || []).map((r) => [r.conv, r]));
+  const people = new Map();
+  for (const r of res[3].results || []) {
+    if (!people.has(r.conv)) people.set(r.conv, []);
+    people.get(r.conv).push(Object.assign(person(r), { state: r.state }));
+  }
+  const convs = (res[1].results || []).map((r) => {
+    const l = last.get(r.id);
+    return {
+      id: r.id, kind: r.kind, name: r.name || null, by: r.created_by, last_seq: r.last_seq, last_at: r.last_at,
+      state: r.state, read: r.read_seq, from: r.from_seq,
+      last: l ? { seq: l.seq, user: l.user, name: nameOf(l.user, l.name), body: l.deleted_at ? '' : l.body, sys: l.sys, del: l.deleted_at ? 1 : 0 } : null,
+      people: people.get(r.id) || []
+    };
+  });
+  const out = {
+    now: c.now, dev: ADMIN, off: !!(res[5].results && res[5].results.length),
+    blocked: (res[4].results || []).map(person), convs
+  };
+  if (admin) out.reports = (res[6].results[0] || {}).n || 0;
+  return json(out);
+}
+
+async function chatUnread(c) {
+  const s = await needUser(c);
+  const admin = s.user === ADMIN;
+  const q = [c.db.prepare(
+    "SELECT COUNT(*) AS n FROM members m JOIN convs c ON c.id = m.conv WHERE m.user = ?1 AND m.state IN ('in', 'req') AND c.last_seq > m.read_seq AND (c.kind <> 'channel' OR ?2)"
+  ).bind(s.user, admin ? 1 : 0)];
+  if (admin) q.push(c.db.prepare('SELECT COUNT(*) AS n FROM (SELECT DISTINCT conv, seq FROM reports)'));
+  const res = await c.db.batch(q);
+  const out = { unread: (res[0].results[0] || {}).n || 0 };
+  if (admin) out.reports = (res[1].results[0] || {}).n || 0;
+  return json(out);
+}
+
+/* after: new messages past that number; before: an older page; neither: the latest page.
+   since: also report messages deleted since then. read=1: you're looking at the chat. */
+async function chatMsgs(c) {
+  const s = await needUser(c);
+  const q = c.url.searchParams;
+  const conv = convId(q.get('conv'));
+  const m = await membership(c, s, conv);
+  const from = m.from_seq || 0;
+  const after = seqParam(q.get('after')), before = seqParam(q.get('before')), since = seqParam(q.get('since'));
+  const cols = 'SELECT g.seq, g.user, g.body, g.at, g.sys, g.deleted_at, u.name, u.kind, a.updated_at AS avatar FROM messages g ' +
+    'LEFT JOIN users u ON u.id = g.user LEFT JOIN avatars a ON a.user = g.user WHERE g.conv = ?1 AND g.seq > ?2';
+  const stmts = [];
+  if (after !== null) stmts.push(c.db.prepare(cols + ' ORDER BY g.seq LIMIT 200').bind(conv, Math.max(after, from)));
+  else if (before !== null) stmts.push(c.db.prepare(cols + ' AND g.seq < ?3 ORDER BY g.seq DESC LIMIT ' + PAGE).bind(conv, from, before));
+  else stmts.push(c.db.prepare(cols + ' ORDER BY g.seq DESC LIMIT ' + PAGE).bind(conv, from));
+  /* 10 s of overlap, so a delete saved while this ran isn't missed */
+  const del = after !== null && since !== null;
+  if (del) stmts.push(c.db.prepare('SELECT seq FROM messages WHERE conv = ?1 AND deleted_at >= ?2 AND seq > ?3').bind(conv, since - 10000, from));
+  const full = q.get('full') === '1';
+  if (full && m.kind !== 'channel') {
+    stmts.push(c.db.prepare(
+      'SELECT o.user AS id, o.state, u.name, u.kind, a.updated_at AS avatar FROM members o LEFT JOIN users u ON u.id = o.user LEFT JOIN avatars a ON a.user = o.user WHERE o.conv = ?1'
+    ).bind(conv));
+  }
+  if (full && m.kind === 'dm') {
+    stmts.push(c.db.prepare('SELECT user FROM blocks WHERE (user = ?1 AND blocked = ?2) OR (user = ?2 AND blocked = ?1)').bind(s.user, dmPartner(conv, s.user)));
+  }
+  const res = await c.db.batch(stmts);
+  const rows = res[0].results || [];
+  if (after === null) rows.reverse();
+  const people = {};
+  const msgs = rows.map((r) => {
+    if (r.user && !people[r.user]) people[r.user] = person({ id: r.user, name: r.name, kind: r.kind, avatar: r.avatar });
+    return { seq: r.seq, user: r.user, body: r.deleted_at ? '' : r.body, at: r.at, sys: r.sys, del: r.deleted_at ? 1 : 0 };
+  });
+  const out = { now: c.now, msgs, people };
+  if (del) out.deleted = (res[1].results || []).map((r) => r.seq);
+  if (after === null) out.more = msgs.length ? msgs[0].seq > from + 1 : false;
+  let read = m.read_seq || 0;
+  if (q.get('read') === '1') {
+    const top = Math.min(m.last_seq, msgs.length && after !== null ? msgs[msgs.length - 1].seq : after !== null ? after : before === null ? m.last_seq : 0);
+    if (top > read || m.fresh) {
+      read = Math.max(read, top);
+      await (m.kind === 'channel'
+        ? c.db.prepare("INSERT INTO members (conv, user, state, read_seq, from_seq, joined_at) VALUES (?1, ?2, 'in', ?3, 0, ?4) ON CONFLICT(conv, user) DO UPDATE SET read_seq = MAX(members.read_seq, excluded.read_seq)").bind(conv, s.user, read, c.now)
+        : c.db.prepare('UPDATE members SET read_seq = MAX(read_seq, ?3) WHERE conv = ?1 AND user = ?2').bind(conv, s.user, read)).run();
+    }
+  }
+  out.read = read;
+  if (full) {
+    let at = 1;
+    if (del) at++;
+    const info = { id: conv, kind: m.kind, name: m.name || null, by: m.created_by, state: m.state, last_seq: m.last_seq, from, off: !!m.banned, people: [] };
+    if (m.kind !== 'channel') info.people = (res[at++].results || []).map((r) => Object.assign(person(r), { state: r.state }));
+    if (m.kind === 'dm') {
+      const b = res[at].results || [];
+      info.blocked = b.some((r) => r.user === s.user);          /* you blocked them */
+    }
+    out.info = info;
+  }
+  return json(out);
+}
+
+async function chatSend(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const conv = convId(b.conv);
+  const body = cleanText(b.body, MSG_MAX, true);
+  if (body === null) throw new HttpError(400, 'long', { max: MSG_MAX });
+  if (!body) throw new HttpError(400, 'empty');
+  if (rudeText(body)) throw new HttpError(400, 'words');
+  const m = await membership(c, s, conv);
+  notBanned(m);
+  if (m.state !== 'in') throw new HttpError(403, 'request');
+  let dm = null;
+  if (m.kind === 'dm') {
+    dm = dmPartner(conv, s.user);
+    if (await blockedPair(c, s.user, dm)) throw new HttpError(403, 'blocked');
+  }
+  await hit(c, 'msg:' + s.user, MSGS_PER_WINDOW, WINDOW, 'slow');
+  if (m.kind === 'channel' && s.user !== ADMIN) await hit(c, 'sug:' + s.user, SUGGESTIONS_PER_HOUR, 60 * MIN, 'slow');
+  /* the app sends retry after a lost answer: if the first try got through, don't post it twice */
+  if (b.retry === true) {
+    const dup = await c.db.prepare('SELECT seq, at FROM messages WHERE conv = ?1 AND seq > ?2 AND user = ?3 AND body = ?4 AND at > ?5 ORDER BY seq DESC LIMIT 1')
+      .bind(conv, Math.max(0, m.last_seq - 30), s.user, body, c.now - 10 * MIN).first();
+    if (dup) return json({ seq: dup.seq, at: dup.at });
+  }
+  const stmts = messageStmts(c, conv, s.user, body, false);
+  if (dm) {
+    /* someone who deleted this chat gets it back with the new message: as a request, unless you're classmates */
+    stmts.push(c.db.prepare("UPDATE members SET state = ?3 WHERE conv = ?1 AND user = ?2 AND state = 'left'").bind(conv, dm, trusted(s.user, dm) ? 'in' : 'req'));
+  }
+  if (m.kind === 'channel' && m.fresh) {
+    stmts.push(c.db.prepare("INSERT OR IGNORE INTO members (conv, user, state, read_seq, from_seq, joined_at) VALUES (?1, ?2, 'in', (SELECT last_seq FROM convs WHERE id = ?1), 0, ?3)").bind(conv, s.user, c.now));
+  }
+  let res;
+  try { res = await c.db.batch(stmts); } catch (e) { throw new HttpError(409, 'conv'); }
+  const row = res[1].results && res[1].results[0];
+  return json({ seq: row ? row.seq : null, at: c.now });
+}
+
+async function chatDm(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const id = userId(b.user);
+  if (id === s.user) throw new HttpError(400, 'self');
+  const conv = NAMES.has(id) || isFreeId(id) ? dmId(s.user, id) : '';
+  if (!conv) throw new HttpError(404, 'user');
+  const res = await c.db.batch([
+    c.db.prepare('SELECT id, kind FROM users WHERE id = ?1 AND pw IS NOT NULL').bind(id),
+    c.db.prepare('SELECT 1 AS x FROM blocks WHERE (user = ?1 AND blocked = ?2) OR (user = ?2 AND blocked = ?1) LIMIT 1').bind(s.user, id),
+    c.db.prepare('SELECT 1 AS x FROM chat_bans WHERE user = ?1').bind(s.user),
+    c.db.prepare("SELECT state FROM members WHERE conv = ?1 AND user = ?2").bind(conv, s.user)
+  ]);
+  const u = res[0].results && res[0].results[0];
+  if (!u || !(NAMES.has(id) || u.kind === 'free')) throw new HttpError(404, 'user');
+  if (res[1].results && res[1].results.length) throw new HttpError(403, 'blocked');
+  const mine = res[3].results && res[3].results[0];
+  if (mine && mine.state === 'in') return json({ conv });
+  if (res[2].results && res[2].results.length) throw new HttpError(403, 'chat_off');
+  if (!mine) await hit(c, 'newchat:' + s.user, 40, 60 * MIN, 'slow');
+  await c.db.batch([
+    c.db.prepare("INSERT OR IGNORE INTO convs (id, kind, created_by, created_at, last_at, last_seq) VALUES (?1, 'dm', ?2, ?3, ?3, 0)").bind(conv, s.user, c.now),
+    /* you: in (a request becomes accepted; a chat you deleted stays empty up to now) */
+    c.db.prepare("INSERT INTO members (conv, user, state, read_seq, from_seq, joined_at) VALUES (?1, ?2, 'in', (SELECT last_seq FROM convs WHERE id = ?1), (SELECT last_seq FROM convs WHERE id = ?1), ?3) " +
+      "ON CONFLICT(conv, user) DO UPDATE SET state = 'in'").bind(conv, s.user, c.now),
+    c.db.prepare('INSERT OR IGNORE INTO members (conv, user, state, read_seq, from_seq, joined_at, added_by) VALUES (?1, ?2, ?4, (SELECT last_seq FROM convs WHERE id = ?1), (SELECT last_seq FROM convs WHERE id = ?1), ?3, ?5)')
+      .bind(conv, id, c.now, trusted(s.user, id) ? 'in' : 'req', s.user)
+  ]);
+  return json({ conv });
+}
+
+function memberRows(ids, adder) { return JSON.stringify(ids.map((id) => ({ id, st: trusted(adder, id) ? 'in' : 'req' }))); }
+const ADD_MEMBERS = "INSERT INTO members (conv, user, state, read_seq, from_seq, joined_at, added_by) " +
+  "SELECT ?1, json_extract(j.value, '$.id'), json_extract(j.value, '$.st'), c.last_seq, c.last_seq, ?2, ?3 FROM json_each(?4) AS j, convs c WHERE c.id = ?1 " +
+  'ON CONFLICT(conv, user) DO UPDATE SET state = excluded.state, read_seq = excluded.read_seq, from_seq = excluded.from_seq, joined_at = excluded.joined_at, added_by = excluded.added_by';
+
+async function chatGroup(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const name = cleanText(b.name, 40);
+  if (name === null) throw new HttpError(400, 'name');
+  if (rudeText(name)) throw new HttpError(400, 'words');
+  await needChat(c, s);
+  const ids = await chatTargets(c, s, b.users, GROUP_MAX - 1);
+  if (!ids.length) throw new HttpError(400, 'users');
+  await hit(c, 'newchat:' + s.user, 40, 60 * MIN, 'slow');
+  const conv = 'g:' + randomToken(9);
+  await c.db.batch([
+    c.db.prepare("INSERT INTO convs (id, kind, name, created_by, created_at, last_at, last_seq) VALUES (?1, 'group', ?2, ?3, ?4, ?4, 0)").bind(conv, name || null, s.user, c.now),
+    c.db.prepare("INSERT INTO members (conv, user, state, read_seq, from_seq, joined_at, added_by) VALUES (?1, ?2, 'in', 0, 0, ?3, ?2)").bind(conv, s.user, c.now),
+    c.db.prepare(ADD_MEMBERS).bind(conv, c.now, s.user, memberRows(ids, s.user)),
+    ...messageStmts(c, conv, s.user, sysBody({ t: 'new', name: name || '' }), true)
+  ]);
+  return json({ conv });
+}
+
+async function groupOf(c, s, b) {
+  const conv = convId(b.conv);
+  const m = await membership(c, s, conv);
+  if (m.kind !== 'group') throw new HttpError(400, 'group');
+  if (m.state !== 'in') throw new HttpError(403, 'request');
+  notBanned(m);
+  return { conv, m };
+}
+async function chatAdd(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const { conv } = await groupOf(c, s, b);
+  const { results } = await c.db.prepare("SELECT user FROM members WHERE conv = ?1 AND state IN ('in', 'req')").bind(conv).all();
+  const now = new Set((results || []).map((r) => r.user));
+  const ids = (await chatTargets(c, s, b.users, GROUP_MAX)).filter((id) => !now.has(id));
+  if (!ids.length) throw new HttpError(400, 'users');
+  if (now.size + ids.length > GROUP_MAX) throw new HttpError(400, 'full', { max: GROUP_MAX });
+  await hit(c, 'chatop:' + s.user, 60, 60 * MIN, 'slow');
+  /* people added later see the chat from here on */
+  await c.db.batch([
+    c.db.prepare(ADD_MEMBERS).bind(conv, c.now, s.user, memberRows(ids, s.user)),
+    ...messageStmts(c, conv, s.user, sysBody({ t: 'add', who: ids }), true)
+  ]);
+  return json({ ok: true, added: ids });
+}
+async function chatRename(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const { conv, m } = await groupOf(c, s, b);
+  const name = cleanText(b.name, 40);
+  if (name === null) throw new HttpError(400, 'name');
+  if (rudeText(name)) throw new HttpError(400, 'words');
+  if (name === (m.name || '')) return json({ ok: true });
+  await hit(c, 'chatop:' + s.user, 60, 60 * MIN, 'slow');
+  await c.db.batch([
+    c.db.prepare('UPDATE convs SET name = ?2 WHERE id = ?1').bind(conv, name || null),
+    ...messageStmts(c, conv, s.user, sysBody({ t: 'name', name }), true)
+  ]);
+  return json({ ok: true });
+}
+/* leave a group, delete a direct chat (for you), or turn down a request */
+async function chatLeave(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const conv = convId(b.conv);
+  const m = await membership(c, s, conv);
+  if (m.kind === 'channel') throw new HttpError(400, 'channel');
+  const stmts = m.kind === 'group' && m.state === 'in' ? messageStmts(c, conv, s.user, sysBody({ t: 'left' }), true) : [];
+  stmts.push(leaveStmt(c, conv, s.user), ...cleanupStmts(c, conv, m.kind === 'dm'));
+  await c.db.batch(stmts);
+  return json({ ok: true });
+}
+async function chatAccept(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const conv = convId(b.conv);
+  const m = await membership(c, s, conv);
+  if (m.state !== 'req') return json({ ok: true });
+  const stmts = [c.db.prepare("UPDATE members SET state = 'in' WHERE conv = ?1 AND user = ?2 AND state = 'req'").bind(conv, s.user)];
+  if (m.kind === 'group') stmts.push(...messageStmts(c, conv, s.user, sysBody({ t: 'join' }), true));
+  await c.db.batch(stmts);
+  return json({ ok: true });
+}
+async function chatBlock(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const id = userId(b.user);
+  if (id === s.user || !(NAMES.has(id) || FREE_ID.test(id))) throw new HttpError(400, 'user');
+  if (b.on === false) {
+    await c.db.prepare('DELETE FROM blocks WHERE user = ?1 AND blocked = ?2').bind(s.user, id).run();
+    return json({ ok: true, blocked: false });
+  }
+  await hit(c, 'chatop:' + s.user, 60, 60 * MIN, 'slow');
+  const conv = dmId(s.user, id);
+  await c.db.batch([
+    c.db.prepare('INSERT OR IGNORE INTO blocks (user, blocked, at) VALUES (?1, ?2, ?3)').bind(s.user, id, c.now),
+    /* your chat with them leaves your list, and so do their group invites */
+    leaveStmt(c, conv, s.user),
+    ...cleanupStmts(c, conv, true),
+    c.db.prepare("UPDATE members SET state = 'left' WHERE user = ?1 AND state = 'req' AND added_by = ?2").bind(s.user, id)
+  ]);
+  return json({ ok: true, blocked: true });
+}
+async function chatUnsend(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const conv = convId(b.conv), seq = seqOf(b.seq);
+  const m = await membership(c, s, conv);
+  /* Mauro keeps Suggestions tidy */
+  const mod = s.user === ADMIN && m.kind === 'channel';
+  const r = await c.db.prepare(
+    "UPDATE messages SET body = '', deleted_at = ?4 WHERE conv = ?1 AND seq = ?2 AND seq > ?6 AND sys = 0 AND deleted_at IS NULL AND (user = ?3 OR ?5)"
+  ).bind(conv, seq, s.user, c.now, mod ? 1 : 0, m.from_seq || 0).run();
+  if (!r.meta || !r.meta.changes) throw new HttpError(404, 'message');
+  return json({ ok: true });
+}
+async function chatReport(c) {
+  const s = await needUser(c);
+  const b = await readBody(c);
+  const conv = convId(b.conv), seq = seqOf(b.seq);
+  const m = await membership(c, s, conv);
+  if (seq <= (m.from_seq || 0)) throw new HttpError(404, 'message');
+  const g = await c.db.prepare('SELECT user, body, sys, deleted_at FROM messages WHERE conv = ?1 AND seq = ?2').bind(conv, seq).first();
+  if (!g || g.sys || g.deleted_at || !g.user || g.user === s.user) throw new HttpError(404, 'message');
+  await hit(c, 'report:' + s.user, 20, 60 * MIN, 'slow');
+  /* a copy of the message, so a report still shows it after the sender deletes it */
+  await c.db.prepare('INSERT OR IGNORE INTO reports (conv, seq, reporter, sender, body, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)')
+    .bind(conv, seq, s.user, g.user, g.body, c.now).run();
+  return json({ ok: true });
+}
+
+/* Mauro: reported messages, newest first, one entry per message */
+async function adminReports(c) {
+  await needAdmin(c);
+  const res = await c.db.batch([
+    c.db.prepare(
+      'SELECT r.conv, r.seq, r.reporter, r.sender, r.body, r.at, c.kind, c.name, g.seq AS live FROM reports r ' +
+      'LEFT JOIN convs c ON c.id = r.conv LEFT JOIN messages g ON g.conv = r.conv AND g.seq = r.seq AND g.body = r.body AND g.deleted_at IS NULL ' +
+      'ORDER BY r.at DESC LIMIT 300'
+    ),
+    c.db.prepare('SELECT user FROM chat_bans')
+  ]);
+  const rows = res[0].results || [];
+  const ids = new Set();
+  rows.forEach((r) => { ids.add(r.sender); ids.add(r.reporter); });
+  const { results } = await c.db.prepare('SELECT u.id, u.name, u.kind, a.updated_at AS avatar FROM users u LEFT JOIN avatars a ON a.user = u.id WHERE u.id IN (SELECT value FROM json_each(?1))')
+    .bind(JSON.stringify([...ids])).all();
+  const who = new Map((results || []).map((r) => [r.id, person(r)]));
+  const off = new Set((res[1].results || []).map((r) => r.user));
+  const pick = (id) => who.get(id) || { id, name: NAMES.get(id) || null, avatar: null, free: !NAMES.has(id) };
+  const byMsg = new Map();
+  for (const r of rows) {
+    const k = r.conv + '#' + r.seq;
+    if (!byMsg.has(k)) {
+      byMsg.set(k, {
+        conv: r.conv, seq: r.seq, kind: r.kind || null, name: r.name || null, body: r.body, at: r.at,
+        gone: !r.live, sender: Object.assign(pick(r.sender), { off: off.has(r.sender) }), by: []
+      });
+    }
+    byMsg.get(k).by.push(pick(r.reporter));
+  }
+  return json({ reports: [...byMsg.values()] });
+}
+async function adminReport(c) {
+  await needAdmin(c);
+  const b = await readBody(c);
+  const conv = convId(b.conv), seq = seqOf(b.seq);
+  const stmts = [];
+  /* only the message that was reported: same number and same text as the report's copy */
+  if (b.remove === true) {
+    stmts.push(c.db.prepare(
+      "UPDATE messages SET body = '', deleted_at = ?3 WHERE conv = ?1 AND seq = ?2 AND deleted_at IS NULL AND sys = 0 AND body IN (SELECT body FROM reports WHERE conv = ?1 AND seq = ?2)"
+    ).bind(conv, seq, c.now));
+  }
+  stmts.push(c.db.prepare('DELETE FROM reports WHERE conv = ?1 AND seq = ?2').bind(conv, seq));
+  await c.db.batch(stmts);
+  return json({ ok: true });
+}
+/* Mauro can turn chat off for one account: they still read, but can't send */
+async function adminChat(c) {
+  await needAdmin(c);
+  const b = await readBody(c);
+  const { id } = await needAccount(c, b.user);
+  if (id === ADMIN) throw new HttpError(400, 'self');
+  await (b.off === true
+    ? c.db.prepare('INSERT OR IGNORE INTO chat_bans (user, at) VALUES (?1, ?2)').bind(id, c.now)
+    : c.db.prepare('DELETE FROM chat_bans WHERE user = ?1').bind(id)).run();
+  return json({ ok: true, off: b.off === true });
 }
